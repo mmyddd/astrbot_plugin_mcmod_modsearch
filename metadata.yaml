@@ -1,0 +1,5 @@
+name: "Emoji合成器"
+author: "hello七七"
+description: "提供Emoji合成功能的QQ机器人插件"
+version: "1.0.0"
+repository: "https://github.com/ttq7/astrbot_plugin_emojisynth"
