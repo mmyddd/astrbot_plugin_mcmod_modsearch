@@ -25,7 +25,7 @@ def synthesize_emojis(emoji_one, emoji_two):
     return None
 
 
-@register("emoji_merge", "你的名字", "Emoji 合成插件", "1.0.0")
+@register("emoji_merge", "hello七七", "Emoji 合成插件", "1.0.0")
 class EmojiPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
