@@ -2,9 +2,25 @@ import aiohttp
 import re
 import json
 import shlex
+import os
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api.message_components import Plain, Image
+from astrbot.api import logger
+
+
+# 加载总结提示词
+SUMMARY_PROMPT = """
+你是一个专业的API响应分析工具。请对以下API响应内容进行简洁清晰的总结，包括：
+返回的主要数据内容
+
+请使用中文回答，保持专业、简洁。
+
+API响应内容:
+```
+{content}
+```
+"""
 
 
 async def send_request(url, method="GET", params=None, data=None, headers=None, cookies=None):
@@ -111,22 +127,48 @@ class HttpRequestPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
 
+    async def summarize_response(self, result, session_id):
+        """使用LLM总结HTTP响应内容"""
+        if not result["success"]:
+            return f"请求失败: {result['message']}"
+        
+        # 获取响应内容
+        response_content = str(result["data"])
+        
+        # 如果内容太少，不需要总结
+        if len(response_content) < 100:
+            return f"请求成功 (状态码: {result['status_code']})\n响应内容:\n{response_content}"
+        
+        # 截断过长内容
+        if len(response_content) > 8000:
+            response_content = response_content[:8000] + "...(内容过长已截断)"
+        
+        # 调用LLM生成总结内容
+        try:
+            prompt = SUMMARY_PROMPT.format(content=response_content)
+            llm_response = await self.context.get_using_provider().text_chat(
+                prompt=prompt,
+                session_id=f"{session_id}_http_summary"
+            )
+            
+            # 输出总结内容
+            return f"请求成功 (状态码: {result['status_code']})\n\n响应内容总结:\n{llm_response.completion_text}"
+        except Exception as e:
+            logger.error(f"总结响应内容时出错: {e}")
+            # 如果总结失败，返回原始内容(截断)
+            truncated_content = response_content[:1500] + ("...(内容过长已截断)" if len(response_content) > 1500 else "")
+            return f"请求成功 (状态码: {result['status_code']})\n响应内容:\n{truncated_content}"
+
     @filter.command("get")
     async def get_request(self, event: AstrMessageEvent, url: str):
-        """发送GET请求到指定URL"""
+        """发送GET请求到指定URL并总结响应内容"""
         result = await send_request(url, method="GET")
-        if result["success"]:
-            response_text = f"请求成功 (状态码: {result['status_code']})\n响应内容:\n{str(result['data'])[:1500]}"
-            if len(str(result['data'])) > 1500:
-                response_text += "\n...(内容过长已截断)"
-        else:
-            response_text = f"请求失败: {result['message']}"
-        
+        response_text = await self.summarize_response(result, event.session_id)
         yield event.chain_result([Plain(response_text)])
 
     @filter.command("post")
     async def post_request(self, event: AstrMessageEvent, url: str, data: str = ""):
-        """发送POST请求到指定URL，可选添加数据参数"""
+        """发送POST请求到指定URL并总结响应内容"""
         # 尝试解析data参数为JSON
         post_data = None
         try:
@@ -137,18 +179,12 @@ class HttpRequestPlugin(Star):
             return
 
         result = await send_request(url, method="POST", data=post_data)
-        if result["success"]:
-            response_text = f"请求成功 (状态码: {result['status_code']})\n响应内容:\n{str(result['data'])[:1500]}"
-            if len(str(result['data'])) > 1500:
-                response_text += "\n...(内容过长已截断)"
-        else:
-            response_text = f"请求失败: {result['message']}"
-        
+        response_text = await self.summarize_response(result, event.session_id)
         yield event.chain_result([Plain(response_text)])
 
     @filter.command("request", "req")
     async def custom_request(self, event: AstrMessageEvent, method: str, url: str, params: str = ""):
-        """发送自定义HTTP请求"""
+        """发送自定义HTTP请求并总结响应内容"""
         # 解析可能的参数
         try:
             params_dict = eval(params) if params else None
@@ -162,18 +198,12 @@ class HttpRequestPlugin(Star):
             headers = params_dict.get("headers")
         
         result = await send_request(url, method=method, data=data, headers=headers)
-        if result["success"]:
-            response_text = f"请求成功 (状态码: {result['status_code']})\n响应内容:\n{str(result['data'])[:1500]}"
-            if len(str(result['data'])) > 1500:
-                response_text += "\n...(内容过长已截断)"
-        else:
-            response_text = f"请求失败: {result['message']}"
-        
+        response_text = await self.summarize_response(result, event.session_id)
         yield event.chain_result([Plain(response_text)])
     
     @filter.command("请求", "curl")
     async def curl_request(self, event: AstrMessageEvent, *args):
-        """使用类似curl的格式发送HTTP请求"""
+        """使用类似curl的格式发送HTTP请求并总结响应内容"""
         # 将所有参数合并回一个字符串
         curl_command = " ".join(args)
         
@@ -196,14 +226,8 @@ class HttpRequestPlugin(Star):
             cookies=parsed_command['cookies']
         )
         
-        # 处理响应
-        if result["success"]:
-            response_text = f"请求成功 (状态码: {result['status_code']})\n响应内容:\n{str(result['data'])[:1500]}"
-            if len(str(result['data'])) > 1500:
-                response_text += "\n...(内容过长已截断)"
-        else:
-            response_text = f"请求失败: {result['message']}"
-        
+        # 处理响应和总结
+        response_text = await self.summarize_response(result, event.session_id)
         yield event.chain_result([Plain(response_text)])
 
     async def terminate(self):
