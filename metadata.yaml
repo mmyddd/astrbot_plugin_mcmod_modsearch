@@ -1,5 +1,5 @@
-name: "Emoji合成器"
-author: "hello七七"
-description: "提供Emoji合成功能的QQ机器人插件"
+name: "HTTP请求工具"
+author: "wayzinx"
+description: "提供HTTP请求功能的机器人插件，支持GET、POST和类curl格式的请求命令"
 version: "1.0.0"
 repository: "https://github.com/ttq7/emoji-"
