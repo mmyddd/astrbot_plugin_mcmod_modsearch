@@ -1,4 +1,4 @@
-import requests
+import aiohttp
 import re
 import json
 import shlex
@@ -10,51 +10,47 @@ from astrbot.api.message_components import Plain, Image
 async def send_request(url, method="GET", params=None, data=None, headers=None, cookies=None):
     """发送HTTP请求并返回结果"""
     try:
-        kwargs = {
-            'params': params,
-            'headers': headers,
-            'timeout': 10
-        }
-        
-        if data:
-            kwargs['data'] = data
+        async with aiohttp.ClientSession(cookies=cookies) as session:
+            kwargs = {
+                'params': params,
+                'headers': headers,
+                'timeout': aiohttp.ClientTimeout(total=10)
+            }
             
-        if cookies:
-            kwargs['cookies'] = cookies
+            if data:
+                # 如果data是字典，保持不变，否则尝试解析为JSON
+                if isinstance(data, dict):
+                    kwargs['json'] = data
+                else:
+                    try:
+                        kwargs['data'] = data
+                    except:
+                        kwargs['data'] = data
             
-        if method.upper() == "GET":
-            response = requests.get(url, **kwargs)
-        elif method.upper() == "POST":
-            response = requests.post(url, **kwargs)
-        elif method.upper() == "PUT":
-            response = requests.put(url, **kwargs)
-        elif method.upper() == "DELETE":
-            response = requests.delete(url, **kwargs)
-        elif method.upper() == "PATCH":
-            response = requests.patch(url, **kwargs)
-        elif method.upper() == "HEAD":
-            response = requests.head(url, **kwargs)
-        elif method.upper() == "OPTIONS":
-            response = requests.options(url, **kwargs)
-        else:
-            return {"success": False, "message": f"不支持的请求方法: {method}"}
-        
-        response.raise_for_status()
-        
-        # 尝试返回JSON响应
-        try:
-            return {"success": True, "data": response.json(), "status_code": response.status_code}
-        except ValueError:
-            # 如果不是JSON，返回文本内容
-            return {"success": True, "data": response.text, "status_code": response.status_code}
+            # 使用getattr获取对应的HTTP方法函数
+            http_method = getattr(session, method.lower(), None)
+            if not http_method:
+                return {"success": False, "message": f"不支持的请求方法: {method}"}
+            
+            async with http_method(url, **kwargs) as response:
+                response.raise_for_status()
+                
+                # 尝试返回JSON响应
+                try:
+                    result = await response.json()
+                    return {"success": True, "data": result, "status_code": response.status}
+                except:
+                    # 如果不是JSON，返回文本内容
+                    text = await response.text()
+                    return {"success": True, "data": text, "status_code": response.status}
     
-    except requests.exceptions.HTTPError as http_err:
-        return {"success": False, "message": f"HTTP错误: {http_err}", "status_code": response.status_code if 'response' in locals() else None}
-    except requests.exceptions.ConnectionError:
+    except aiohttp.ClientResponseError as http_err:
+        return {"success": False, "message": f"HTTP错误: {http_err}", "status_code": http_err.status}
+    except aiohttp.ClientConnectorError:
         return {"success": False, "message": "连接错误: 无法连接到服务器"}
-    except requests.exceptions.Timeout:
+    except aiohttp.ClientTimeout:
         return {"success": False, "message": "请求超时: 服务器响应时间过长"}
-    except requests.exceptions.RequestException as e:
+    except aiohttp.ClientError as e:
         return {"success": False, "message": f"请求错误: {str(e)}"}
 
 
