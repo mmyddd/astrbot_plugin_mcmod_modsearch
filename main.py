@@ -3,6 +3,8 @@ import re
 import json
 import shlex
 import os
+import asyncio
+from urllib.parse import urlparse
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api.message_components import Plain, Image
@@ -22,56 +24,91 @@ API响应内容:
 ```
 """
 
+# 配置常量
+MAX_RESPONSE_SIZE = 10 * 1024 * 1024  # 10MB响应限制
+MAX_RETRIES = 3  # 最大重试次数
+RETRY_DELAY = 1  # 初始重试延迟(秒)
+
 
 async def send_request(url, method="GET", params=None, data=None, headers=None, cookies=None):
-    """发送HTTP请求并返回结果"""
-    try:
-        async with aiohttp.ClientSession(cookies=cookies) as session:
-            kwargs = {
-                'params': params,
-                'headers': headers,
-                'timeout': aiohttp.ClientTimeout(total=10)
-            }
-            
-            if data:
-                # 如果data是字典，保持不变，否则尝试解析为JSON
-                if isinstance(data, dict):
-                    kwargs['json'] = data
-                else:
-                    try:
-                        kwargs['data'] = data
-                    except:
-                        kwargs['data'] = data
-            
-            # 使用getattr获取对应的HTTP方法函数
-            http_method = getattr(session, method.lower(), None)
-            if not http_method:
-                return {"success": False, "message": f"不支持的请求方法: {method}"}
-            
-            async with http_method(url, **kwargs) as response:
-                response.raise_for_status()
-                
-                # 尝试返回JSON响应
-                try:
-                    result = await response.json()
-                    return {"success": True, "data": result, "status_code": response.status}
-                except:
-                    # 如果不是JSON，返回文本内容
-                    text = await response.text()
-                    return {"success": True, "data": text, "status_code": response.status}
+    """发送HTTP请求并返回结果，支持自动重试和响应大小限制"""
+    retries = 0
+    last_error = None
     
-    except aiohttp.ClientResponseError as http_err:
-        return {"success": False, "message": f"HTTP错误: {http_err}", "status_code": http_err.status}
-    except aiohttp.ClientConnectorError:
-        return {"success": False, "message": "连接错误: 无法连接到服务器"}
-    except aiohttp.ClientTimeout:
-        return {"success": False, "message": "请求超时: 服务器响应时间过长"}
-    except aiohttp.ClientError as e:
-        return {"success": False, "message": f"请求错误: {str(e)}"}
+    while retries <= MAX_RETRIES:
+        try:
+            async with aiohttp.ClientSession(cookies=cookies) as session:
+                kwargs = {
+                    'params': params,
+                    'headers': headers,
+                    'timeout': aiohttp.ClientTimeout(total=10)
+                }
+                
+                if data:
+                    # 如果data是字典，作为json发送，否则作为表单数据发送
+                    if isinstance(data, dict):
+                        kwargs['json'] = data
+                    else:
+                        kwargs['data'] = data
+                
+                # 使用getattr获取对应的HTTP方法函数
+                http_method = getattr(session, method.lower(), None)
+                if not http_method:
+                    return {"success": False, "message": f"不支持的请求方法: {method}"}
+                
+                async with http_method(url, **kwargs) as response:
+                    response.raise_for_status()
+                    
+                    # 获取内容大小信息
+                    content_length = response.headers.get('Content-Length')
+                    if content_length and int(content_length) > MAX_RESPONSE_SIZE:
+                        return {
+                            "success": False, 
+                            "message": f"响应数据过大: {int(content_length)/1024/1024:.2f}MB (最大限制: {MAX_RESPONSE_SIZE/1024/1024}MB)",
+                            "status_code": response.status
+                        }
+                    
+                    # 使用流式读取避免一次加载大型响应
+                    data = bytearray()
+                    chunk_size = 8192  # 8KB chunks
+                    async for chunk in response.content.iter_chunked(chunk_size):
+                        data.extend(chunk)
+                        if len(data) > MAX_RESPONSE_SIZE:
+                            return {
+                                "success": False, 
+                                "message": f"响应数据超过限制: {MAX_RESPONSE_SIZE/1024/1024}MB",
+                                "status_code": response.status
+                            }
+                    
+                    # 尝试解析为JSON
+                    try:
+                        result = json.loads(data.decode('utf-8'))
+                        return {"success": True, "data": result, "status_code": response.status}
+                    except:
+                        # 如果不是JSON，返回文本内容
+                        return {"success": True, "data": data.decode('utf-8'), "status_code": response.status}
+        
+        except aiohttp.ClientResponseError as http_err:
+            # 非网络错误，直接返回
+            return {"success": False, "message": f"HTTP错误: {http_err}", "status_code": http_err.status}
+        except (aiohttp.ClientConnectorError, aiohttp.ServerTimeoutError, aiohttp.ClientOSError) as e:
+            # 网络连接错误或超时，可重试
+            retries += 1
+            last_error = e
+            if retries <= MAX_RETRIES:
+                await asyncio.sleep(RETRY_DELAY * retries)  # 增加重试延迟
+                logger.info(f"重试请求({retries}/{MAX_RETRIES}): {url}")
+                continue
+            else:
+                # 达到最大重试次数
+                return {"success": False, "message": f"请求失败(已重试{MAX_RETRIES}次): {str(last_error)}"}
+        except Exception as e:
+            # 其他错误不重试
+            return {"success": False, "message": f"请求错误: {str(e)}"}
 
 
 def parse_curl_command(curl_command):
-    """解析类似curl的命令格式"""
+    """解析类似curl的命令格式，使用更健壮的URL解析"""
     result = {
         'method': 'GET',
         'url': '',
@@ -84,9 +121,14 @@ def parse_curl_command(curl_command):
     clean_command = curl_command.replace("^", "").replace('\\\"', '"')
     
     # 提取URL
-    url_match = re.search(r'curl\s+["\']?(https?://[^"\'\s]+)["\']?', clean_command)
+    url_match = re.search(r'curl\s+["\']?(https?://[^\s"\']+)["\']?', clean_command)
     if url_match:
-        result['url'] = url_match.group(1)
+        url = url_match.group(1)
+        # 验证URL格式
+        parsed_url = urlparse(url)
+        if not (parsed_url.scheme and parsed_url.netloc):
+            return None, "无效的URL格式，确保包含协议(http/https)和域名"
+        result['url'] = url
     else:
         return None, "无法解析URL，请检查格式"
     
@@ -114,7 +156,14 @@ def parse_curl_command(curl_command):
     # 提取数据
     data_match = re.search(r'-d\s+["\'](.+?)["\']', clean_command)
     if data_match:
-        result['data'] = data_match.group(1)
+        data_str = data_match.group(1)
+        # 尝试解析为JSON
+        try:
+            result['data'] = json.loads(data_str)
+        except json.JSONDecodeError:
+            # 如果不是JSON格式，保持原始字符串
+            result['data'] = data_str
+            
         # 如果指定了数据但没指定方法，默认为POST
         if 'method' not in result:
             result['method'] = 'POST'
@@ -162,6 +211,12 @@ class HttpRequestPlugin(Star):
     @filter.command("get")
     async def get_request(self, event: AstrMessageEvent, url: str):
         """发送GET请求到指定URL并总结响应内容"""
+        # 验证URL格式
+        parsed_url = urlparse(url)
+        if not (parsed_url.scheme and parsed_url.netloc):
+            yield event.chain_result([Plain("无效的URL格式，确保包含协议(http/https)和域名")])
+            return
+            
         result = await send_request(url, method="GET")
         response_text = await self.summarize_response(result, event.session_id)
         yield event.chain_result([Plain(response_text)])
@@ -169,13 +224,19 @@ class HttpRequestPlugin(Star):
     @filter.command("post")
     async def post_request(self, event: AstrMessageEvent, url: str, data: str = ""):
         """发送POST请求到指定URL并总结响应内容"""
+        # 验证URL格式
+        parsed_url = urlparse(url)
+        if not (parsed_url.scheme and parsed_url.netloc):
+            yield event.chain_result([Plain("无效的URL格式，确保包含协议(http/https)和域名")])
+            return
+            
         # 尝试解析data参数为JSON
         post_data = None
         try:
             if data:
-                post_data = eval(data)  # 注意: 生产环境应当避免使用eval
-        except:
-            yield event.chain_result([Plain("数据格式错误，请使用有效的Python字典格式")])
+                post_data = json.loads(data)
+        except json.JSONDecodeError:
+            yield event.chain_result([Plain("数据格式错误，请使用有效的JSON格式")])
             return
 
         result = await send_request(url, method="POST", data=post_data)
@@ -185,11 +246,17 @@ class HttpRequestPlugin(Star):
     @filter.command("request", "req")
     async def custom_request(self, event: AstrMessageEvent, method: str, url: str, params: str = ""):
         """发送自定义HTTP请求并总结响应内容"""
+        # 验证URL格式
+        parsed_url = urlparse(url)
+        if not (parsed_url.scheme and parsed_url.netloc):
+            yield event.chain_result([Plain("无效的URL格式，确保包含协议(http/https)和域名")])
+            return
+            
         # 解析可能的参数
         try:
-            params_dict = eval(params) if params else None
-        except:
-            yield event.chain_result([Plain("参数格式错误，请使用有效的Python字典格式")])
+            params_dict = json.loads(params) if params else None
+        except json.JSONDecodeError:
+            yield event.chain_result([Plain("参数格式错误，请使用有效的JSON格式")])
             return
             
         data = headers = None
