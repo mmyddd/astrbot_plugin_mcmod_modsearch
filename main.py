@@ -166,7 +166,7 @@ class HttpRequestPlugin(Star):
         
         return table
 
-    @filter.command("查模组")
+    @filter.command("查mod")
     async def search_mod(self, event: AstrMessageEvent, name: str):
         """查询mcmod百科中的模组"""
         url = f"{API_BASE_URL}/search?mod={name}"
