@@ -138,7 +138,7 @@ async def send_request(url, method="GET", params=None, data=None, headers=None, 
         except Exception as e:
             return {"success": False, "message": f"请求错误: {str(e)}"}
 
-@register("mcmod查询插件", "mmyddd", "基于wayzinx/HTTP请求插件修改", "1.0.0")
+@register("mcmod查询插件", "mmyddd", "一个查询mcmod内mod/整合包的插件，基于wayzinx/HTTP请求插件修改", "1.0.0")
 class HttpRequestPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
