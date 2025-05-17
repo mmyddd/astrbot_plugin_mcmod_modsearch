@@ -4,29 +4,52 @@ import json
 import shlex
 import os
 import asyncio
-import importlib.util
+import subprocess
 from urllib.parse import urlparse
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api.message_components import Plain, Image
 from astrbot.api import logger
 
-# 在插件加载时尝试加载mcmod_api.py
+# 在插件加载时尝试运行mcmod_api.py
 try:
     # 获取当前文件所在目录
     current_dir = os.path.dirname(os.path.abspath(__file__))
     api_path = os.path.join(current_dir, "api", "mcmod_api.py")
     
-    # 动态加载模块
-    spec = importlib.util.spec_from_file_location("mcmod_api", api_path)
-    if spec and spec.loader:
-        mcmod_api = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mcmod_api)
-        logger.info("成功加载mcmod_api.py")
+    # 检查文件是否存在
+    if os.path.exists(api_path):
+        logger.info(f"正在启动 mcmod_api.py...")
+        
+        # 使用subprocess运行脚本（非阻塞方式）
+        process = subprocess.Popen(
+            ["python", api_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=os.path.dirname(api_path),
+            text=True
+        )
+        
+        # 定义检查进程状态的函数
+        def check_process():
+            return_code = process.poll()
+            if return_code is None:
+                logger.info("mcmod_api.py 仍在运行中...")
+                # 5秒后再次检查
+                asyncio.get_event_loop().call_later(5, check_process)
+            elif return_code == 0:
+                logger.info("mcmod_api.py 成功启动")
+            else:
+                stderr = process.stderr.read()
+                logger.error(f"mcmod_api.py 启动失败 (返回码: {return_code}): {stderr}")
+        
+        # 首次检查
+        asyncio.get_event_loop().call_soon(check_process)
+        
     else:
-        logger.warning("无法加载mcmod_api.py: 文件不存在或路径错误")
+        logger.warning(f"未找到mcmod_api.py文件: {api_path}")
 except Exception as e:
-    logger.error(f"加载mcmod_api.py时出错: {e}")
+    logger.error(f"运行mcmod_api.py时出错: {e}")
 
 # API配置
 API_BASE_URL = "http://localhost:15001"  # 修改为您的API服务器地址
@@ -119,6 +142,7 @@ async def send_request(url, method="GET", params=None, data=None, headers=None, 
 class HttpRequestPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
+        self.mcmod_process = None  # 存储子进程引用
 
     async def format_mod_results(self, result):
         """格式化模组/整合包搜索结果"""
@@ -183,7 +207,11 @@ class HttpRequestPlugin(Star):
             truncated_content = response_content[:1500] + ("...(内容过长已截断)" if len(response_content) > 1500 else "")
             return f"请求成功 (状态码: {result['status_code']})\n响应内容:\n{truncated_content}"
 
-
-
     async def terminate(self):
-        pass
+        """插件终止时清理子进程"""
+        if hasattr(self, 'mcmod_process') and self.mcmod_process:
+            try:
+                self.mcmod_process.terminate()
+                logger.info("已终止mcmod_api.py进程")
+            except Exception as e:
+                logger.error(f"终止mcmod_api.py进程时出错: {e}")
