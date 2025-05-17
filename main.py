@@ -36,7 +36,7 @@ try:
             if return_code is None:
                 logger.info("mcmod_api.py 仍在运行中...")
                 # 5秒后再次检查
-                asyncio.get_event_loop().call_later(5, check_process)
+                asyncio.get_event_loop().call_later(60, check_process)
             elif return_code == 0:
                 logger.info("mcmod_api.py 成功启动")
             else:
