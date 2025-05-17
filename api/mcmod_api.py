@@ -110,7 +110,7 @@ class MCMODSearchAPI:
             return True
         return False
 
-    def run(self, host='0.0.0.0', port=5000):
+    def run(self, host='0.0.0.0', port=15001):
         """启动API服务器"""
         print(f"\nmcmod搜索API服务已启动\n")
         print(f"模组搜索: http://{host}:{port}/search?mod=工业")

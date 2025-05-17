@@ -29,7 +29,7 @@ except Exception as e:
     logger.error(f"加载mcmod_api.py时出错: {e}")
 
 # API配置
-API_BASE_URL = "http://localhost:5000"  # 修改为您的API服务器地址
+API_BASE_URL = "http://localhost:15001"  # 修改为您的API服务器地址
 
 # 加载总结提示词
 SUMMARY_PROMPT = """
