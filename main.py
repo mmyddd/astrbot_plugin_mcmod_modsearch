@@ -140,7 +140,7 @@ class MCMODSearch:
             return {"status": "error", "message": str(e)}
 
     def format_results(self, data: dict, search_type: str) -> str:
-        """格式化搜索结果（确保应用max_name_length配置）"""
+        """格式化搜索结果（应用max_name_length配置）"""
         if data.get("status") != "success":
             return f"搜索失败: {data.get('message', '未知错误')}"
         
@@ -149,9 +149,10 @@ class MCMODSearch:
             return f"没有找到相关{self.SEARCH_TYPES.get(search_type, '')}结果"
         
         limit = self.config.config['max_multi_results'] if search_type == "all" else self.config.config['max_single_results']
-        max_len = int(self.config.config['max_name_length'])
+        max_len = self.config.config['max_name_length']  # 直接从配置获取
         
         def format_name(name):
+            """格式化名称，应用max_name_length配置"""
             name = str(name or '未知')
             return name[:max_len] + ('...' if len(name) > max_len else '')
         
