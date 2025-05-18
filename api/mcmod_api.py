@@ -1,128 +1,121 @@
-import requests
+import aiohttp
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 import re
-from flask import Flask, jsonify, request
-import threading
+from aiohttp import web
+import asyncio
 
 class MCMODSearchAPI:
+    BASE_URL = "https://search.mcmod.cn/s"
+    DOMAIN = "mcmod.cn"
+    USER_AGENT = "Mozilla/5.0"
+    TIMEOUT = aiohttp.ClientTimeout(total=15)
+    
     def __init__(self):
         self.seen_urls = set()
-        self.app = Flask(__name__)
-        self._setup_routes()
+        self.app = web.Application()
+        self.app.router.add_get('/search', self.handle_search)
         
-    def _setup_routes(self):
-        @self.app.route('/search')
-        def api_search():
-            # 获取查询参数
-            mod_query = request.args.get('mod')
-            modpack_query = request.args.get('modpack')
-            
-            # 参数验证
-            if not mod_query and not modpack_query:
-                return jsonify({
-                    "status": "error",
-                    "message": "需要提供mod或modpack参数，例如: /search?mod=工业 或 /search?modpack=科技"
-                }), 400
-            
-            try:
-                # 根据参数类型进行搜索
-                if mod_query:
-                    result_type = "mods"
-                    result_data = self._fetch_search_results(mod_query, search_mods=True)
-                else:
-                    result_type = "modpacks"
-                    result_data = self._fetch_search_results(modpack_query, search_mods=False)
-                
-                return jsonify({
-                    "status": "success",
-                    "query": mod_query if mod_query else modpack_query,
-                    "type": result_type,
-                    "count": len(result_data),
-                    "results": result_data
-                })
-                
-            except requests.exceptions.RequestException as e:
-                return jsonify({
-                    "status": "error",
-                    "message": f"请求mcmod百科失败: {str(e)}"
-                }), 502
-            except Exception as e:
-                return jsonify({
-                    "status": "error",
-                    "message": f"服务器错误: {str(e)}"
-                }), 500
+    async def handle_search(self, request: web.Request):
+        query = request.query.get('mod') or request.query.get('modpack')
+        if not query:
+            return self.error_response("需要提供mod或modpack参数", 400)
+        
+        try:
+            is_mod_search = 'mod' in request.query
+            results = await self.fetch_results(query, is_mod_search)
+            return self.success_response(query, results, is_mod_search)
+        except aiohttp.ClientError as e:
+            return self.error_response(f"请求mcmod百科失败: {str(e)}", 502)
+        except Exception as e:
+            return self.error_response(f"服务器错误: {str(e)}", 500)
 
-    def _fetch_search_results(self, keyword, search_mods=True):
-        """获取并处理搜索结果
-        :param search_mods: True搜索模组，False搜索整合包
-        """
+    async def fetch_results(self, keyword, is_mod_search):
         self.seen_urls.clear()
+        html = await self.fetch_search_page(keyword)
+        return self.parse_results(html, is_mod_search)
+    
+    async def fetch_search_page(self, keyword):
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                self.BASE_URL,
+                params={"key": keyword, "filter": 0},
+                headers={"User-Agent": self.USER_AGENT},
+                timeout=self.TIMEOUT
+            ) as response:
+                response.raise_for_status()
+                return await response.text()
+    
+    def parse_results(self, html, is_mod_search):
+        soup = BeautifulSoup(html, 'html.parser')
         results = []
         
-        response = requests.get(
-            url="https://search.mcmod.cn/s",
-            params={"key": keyword, "filter": 0},
-            headers={"User-Agent": "Mozilla/5.0"},
-            timeout=15
-        )
-        response.raise_for_status()
-        
-        soup = BeautifulSoup(response.text, 'html.parser')
         for item in soup.find_all(class_='search-result'):
             for link in item.find_all('a', {'target': '_blank'}):
-                raw_url = link.get('href', '')
-                if not raw_url: continue
-                
-                full_url = self._normalize_url(raw_url)
-                if full_url in self.seen_urls or self._need_filter(full_url):
-                    continue
-                
-                # 根据搜索类型过滤结果
-                if search_mods and "/class/" not in full_url:
-                    continue
-                if not search_mods and "/modpack/" not in full_url:
-                    continue
-                
-                self.seen_urls.add(full_url)
-                title = link.text.strip()[:40] or "未命名项目"
-                results.append({
-                    "name": title,
-                    "url": full_url
-                })
+                if url := self.process_link(link, is_mod_search):
+                    results.append(url)
         
         return results
-
-    def _normalize_url(self, url):
-        """规范化URL"""
-        if not url.startswith(('http://', 'https://')):
-            return f"https://www.mcmod.cn{url}"
-        return url
-
-    def _need_filter(self, url):
-        """检查URL是否需要过滤"""
+    
+    def process_link(self, link, is_mod_search):
+        if not (raw_url := link.get('href', '')):
+            return None
+            
+        full_url = self.normalize_url(raw_url)
+        if (full_url in self.seen_urls or 
+            self.should_filter(full_url) or 
+            not self.is_correct_type(full_url, is_mod_search)):
+            return None
+            
+        self.seen_urls.add(full_url)
+        return {
+            "name": link.text.strip()[:40] or "未命名项目",
+            "url": full_url
+        }
+    
+    def normalize_url(self, url):
+        return f"https://www.mcmod.cn{url}" if not url.startswith(('http://', 'https://')) else url
+    
+    def should_filter(self, url):
         parsed = urlparse(url)
-        if not parsed.netloc.endswith('mcmod.cn'):
-            return True
-        if re.search(r'mcmod\.cn//.*mcmod\.cn', url):
-            return True
-        if '/class/category/' in url:
-            return True
-        return False
-
-    def run(self, host='0.0.0.0', port=15001):
-        """启动API服务器"""
+        return (
+            not parsed.netloc.endswith(self.DOMAIN) or
+            re.search(r'mcmod\.cn//.*mcmod\.cn', url) or
+            '/class/category/' in url
+        )
+    
+    def is_correct_type(self, url, is_mod_search):
+        return ("/class/" in url if is_mod_search else "/modpack/" in url)
+    
+    def success_response(self, query, results, is_mod_search):
+        return web.json_response({
+            "status": "success",
+            "query": query,
+            "type": "mods" if is_mod_search else "modpacks",
+            "count": len(results),
+            "results": results
+        })
+    
+    def error_response(self, message, status):
+        return web.json_response({
+            "status": "error",
+            "message": message
+        }, status=status)
+    
+    async def run(self, host='0.0.0.0', port=15001):
         print(f"\nmcmod搜索API服务已启动\n")
         print(f"模组搜索: http://{host}:{port}/search?mod=工业")
         print(f"整合包搜索: http://{host}:{port}/search?modpack=科技\n")
-        self.app.run(host=host, port=port)
+        
+        runner = web.AppRunner(self.app)
+        await runner.setup()
+        await web.TCPSite(runner, host, port).start()
+        
+        while True:
+            await asyncio.sleep(3600)
 
 if __name__ == "__main__":
     try:
-        from flask import Flask, jsonify, request
-    except ImportError:
-        print("请安装依赖：pip install flask requests beautifulsoup4")
-        exit(1)
-    
-    api = MCMODSearchAPI()
-    api.run()
+        asyncio.run(MCMODSearchAPI().run())
+    except (ImportError, KeyboardInterrupt) as e:
+        print("\n服务器已停止" if isinstance(e, KeyboardInterrupt) else "请安装依赖：pip install aiohttp beautifulsoup4")
