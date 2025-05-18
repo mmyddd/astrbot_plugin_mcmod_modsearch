@@ -35,14 +35,10 @@ class PluginConfig:
 
     def _validate_config(self):
         """验证并修正配置值"""
-        # 端口范围验证
         self.config["api_port"] = max(1024, min(65535, self.config["api_port"]))
-        # 结果数量验证
         self.config["max_single_results"] = max(1, min(50, self.config["max_single_results"]))
         self.config["max_multi_results"] = max(1, min(20, self.config["max_multi_results"]))
-        # 超时时间验证
         self.config["api_timeout"] = max(5, min(30, self.config["api_timeout"]))
-        # 名称长度验证
         self.config["max_name_length"] = max(10, min(100, self.config["max_name_length"]))
 
     @property
@@ -55,7 +51,7 @@ class MCMODSearch:
         "mod": "模组",
         "modpack": "整合包", 
         "item": "物品",
-        "post": "教程"  # 修改为"教程"
+        "post": "教程"
     }
 
     def __init__(self, config: PluginConfig):
@@ -156,7 +152,7 @@ class MCMODSearchPlugin(Star):
         result = await self.searcher.search("item", name)
         yield event.chain_result([Plain(self.searcher.format_results(result, "item"))])
 
-    @filter.command("查教程")  # 修改为"查教程"
+    @filter.command("查教程")
     async def search_post(self, event: AstrMessageEvent, name: str):
         result = await self.searcher.search("post", name)
         yield event.chain_result([Plain(self.searcher.format_results(result, "post"))])
