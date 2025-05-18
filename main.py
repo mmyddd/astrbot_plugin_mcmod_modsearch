@@ -52,7 +52,7 @@ class MCMODSearch:
         "mod": "模组",
         "modpack": "整合包", 
         "item": "物品",
-        "post": "帖子"
+        "post": "插件"
     }
 
     def __init__(self, config: PluginConfig):
