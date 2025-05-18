@@ -12,33 +12,35 @@ class PluginConfig:
     """插件配置管理类"""
     def __init__(self, context: Context):
         self.context = context
-        self.config = self._load_default_config()
+        self.config = self._load_config()
         self._validate_config()
 
-    def _load_default_config(self):
-        """加载默认配置"""
+    def _load_config(self):
+        """加载并转换配置类型"""
+        raw_config = self.context.get_config()
         return {
-            "api_port": 15001,
-            "max_single_results": 20,
-            "max_multi_results": 10,
-            "api_timeout": 15,
-            "enable_all_search": True
+            "api_port": int(raw_config.get("api_port", 15001)),
+            "max_single_results": int(raw_config.get("max_single_results", 20)),
+            "max_multi_results": int(raw_config.get("max_multi_results", 10)),
+            "api_timeout": int(raw_config.get("api_timeout", 15)),
+            "enable_all_search": self._to_bool(raw_config.get("enable_all_search", True))
         }
+
+    def _to_bool(self, value):
+        """安全转换为布尔值"""
+        if isinstance(value, bool):
+            return value
+        return str(value).lower() in ('true', '1', 'yes', 't')
 
     def _validate_config(self):
         """验证并修正配置值"""
-        try:
-            # 端口范围验证
-            self.config["api_port"] = max(1024, min(65535, int(self.config.get("api_port", 15001))))
-            # 结果数量验证
-            self.config["max_single_results"] = max(1, min(50, int(self.config.get("max_single_results", 20))))
-            self.config["max_multi_results"] = max(1, min(20, int(self.config.get("max_multi_results", 10))))
-            # 超时时间验证
-            self.config["api_timeout"] = max(5, min(30, int(self.config.get("api_timeout", 15))))
-            # 布尔值验证
-            self.config["enable_all_search"] = bool(self.config.get("enable_all_search", True))
-        except Exception as e:
-            logger.error(f"配置验证失败: {e}")
+        # 端口范围验证
+        self.config["api_port"] = max(1024, min(65535, self.config["api_port"]))
+        # 结果数量验证
+        self.config["max_single_results"] = max(1, min(50, self.config["max_single_results"]))
+        self.config["max_multi_results"] = max(1, min(20, self.config["max_multi_results"]))
+        # 超时时间验证
+        self.config["api_timeout"] = max(5, min(30, self.config["api_timeout"]))
 
     @property
     def api_base_url(self):
@@ -50,7 +52,7 @@ class MCMODSearch:
         "mod": "模组",
         "modpack": "整合包", 
         "item": "物品",
-        "post": "教程"
+        "post": "帖子"
     }
 
     def __init__(self, config: PluginConfig):
@@ -106,9 +108,7 @@ class MCMODSearch:
         if not results:
             return f"没有找到相关{self.SEARCH_TYPES.get(search_type, '')}结果"
         
-        # 确定显示数量限制
         limit = self.config.config['max_multi_results'] if search_type == "all" else self.config.config['max_single_results']
-        
         table = "| 类型 | 名称 | 链接 |\n|------|------|------|\n"
         
         if search_type == "all":
