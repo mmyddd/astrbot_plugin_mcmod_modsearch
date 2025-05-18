@@ -1,5 +1,4 @@
 import aiohttp
-import json
 import os
 import asyncio
 import subprocess
@@ -57,35 +56,93 @@ class MCMODSearch:
     def __init__(self, config: PluginConfig):
         self.config = config
         self.api_process = None
+        self.api_ready = asyncio.Event()
+        self.output_task = None
+        self.error_task = None
+
+    async def _log_stream(self, stream, log_level):
+        """实时记录子进程输出"""
+        while True:
+            line = await stream.readline()
+            if not line:
+                break
+            getattr(logger, log_level)(f"[API] {line.strip()}")
+            if "Application startup complete" in line:
+                self.api_ready.set()
+
+    async def _check_api_ready(self):
+        """检查API是否就绪"""
+        timeout = aiohttp.ClientTimeout(total=2)
+        for _ in range(10):  # 最多尝试10次
+            try:
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(f"{self.config.api_base_url}/status"):
+                        return True
+            except:
+                await asyncio.sleep(1)
+        return False
 
     async def start_api_server(self):
         """启动API服务器子进程"""
         try:
             api_path = os.path.join(os.path.dirname(__file__), "api", "mcmod_api.py")
-            if os.path.exists(api_path):
-                logger.info(f"启动API服务，端口: {self.config.config['api_port']}")
-                self.api_process = subprocess.Popen(
-                    ["python", api_path, str(self.config.config['api_port'])],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    cwd=os.path.dirname(api_path),
-                    text=True
-                )
-                
-                def check_process():
-                    if self.api_process.poll() is None:
-                        asyncio.get_event_loop().call_later(60, check_process)
-                    elif self.api_process.returncode == 0:
-                        logger.info("API服务启动成功")
-                    else:
-                        logger.error(f"API服务启动失败: {self.api_process.stderr.read()}")
-                
-                asyncio.get_event_loop().call_soon(check_process)
+            if not os.path.exists(api_path):
+                logger.error(f"API脚本不存在: {api_path}")
+                return
+    
+            # 修正此处：补全create_subprocess_exec的括号
+            self.api_process = await asyncio.create_subprocess_exec(
+                "python", api_path, str(self.config.config['api_port']),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=os.path.dirname(api_path)
+            )  # 这里补全了右括号
+            
+            # 启动输出捕获任务
+            self.output_task = asyncio.create_task(
+                self._log_stream(self.api_process.stdout, "info"))
+            self.error_task = asyncio.create_task(
+                self._log_stream(self.api_process.stderr, "error"))
+    
+            # 检查API状态（增加超时保护）
+            try:
+                if await asyncio.wait_for(self._check_api_ready(), timeout=15):
+                    logger.info("API服务启动成功")
+                    self.api_ready.set()
+                else:
+                    logger.error("API服务启动超时")
+                    await self._safe_terminate()
+            except asyncio.TimeoutError:
+                logger.error("API状态检查超时")
+                await self._safe_terminate()
+    
         except Exception as e:
-            logger.error(f"启动API服务出错: {e}")
+            logger.error(f"启动API服务出错: {str(e)}", exc_info=True)
+            await self._safe_terminate()
+            raise  # 重新抛出异常以便上层捕获
+    
+    async def _safe_terminate(self):
+        """安全终止子进程"""
+        if self.api_process:
+            try:
+                self.api_process.terminate()
+                await asyncio.wait_for(self.api_process.wait(), timeout=3)
+            except:
+                try:
+                    self.api_process.kill()
+                except:
+                    pass
+        if self.output_task:
+            self.output_task.cancel()
+        if self.error_task:
+            self.error_task.cancel()
 
     async def search(self, search_type: str, query: str) -> dict:
         """执行搜索请求"""
+        if not self.api_ready.is_set():
+            logger.warning("等待API服务就绪...")
+            await self.api_ready.wait()
+
         try:
             timeout = aiohttp.ClientTimeout(total=self.config.config['api_timeout'])
             async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -129,7 +186,7 @@ class MCMODSearch:
                 table += f"...共{len(results)}条结果\n"
             return table
 
-@register("MCMOD搜索插件", "mcmod", "MCMOD百科内容搜索", "1.0.0")
+@register("MCMOD搜索插件", "mcmod", "MCMOD百科内容搜索", "2.1.0")
 class MCMODSearchPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -167,9 +224,5 @@ class MCMODSearchPlugin(Star):
         yield event.chain_result([Plain(self.searcher.format_results(result, "all"))])
 
     async def terminate(self):
-        if self.searcher.api_process:
-            try:
-                self.searcher.api_process.terminate()
-                logger.info("已停止API服务")
-            except Exception as e:
-                logger.error(f"停止API服务出错: {e}")
+        await self.searcher._safe_terminate()
+        logger.info("插件已停止")
