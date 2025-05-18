@@ -22,8 +22,7 @@ class PluginConfig:
             "max_single_results": int(raw_config.get("max_single_results", 20)),
             "max_multi_results": int(raw_config.get("max_multi_results", 10)),
             "api_timeout": int(raw_config.get("api_timeout", 15)),
-            "enable_all_search": self._to_bool(raw_config.get("enable_all_search", True)),
-            "max_name_length": int(raw_config.get("max_name_length", 50))
+            "enable_all_search": self._to_bool(raw_config.get("enable_all_search", True))
         }
 
     def _to_bool(self, value):
@@ -38,7 +37,6 @@ class PluginConfig:
         self.config["max_single_results"] = max(1, min(50, self.config["max_single_results"]))
         self.config["max_multi_results"] = max(1, min(20, self.config["max_multi_results"]))
         self.config["api_timeout"] = max(5, min(30, self.config["api_timeout"]))
-        self.config["max_name_length"] = max(10, min(100, self.config["max_name_length"]))
 
     @property
     def api_base_url(self):
@@ -89,7 +87,6 @@ class MCMODSearch:
             self.api_process = await asyncio.create_subprocess_exec(
                 "python", api_path, 
                 str(self.config.config['api_port']),
-                str(self.config.config['max_name_length']),  # 传递max_name_length参数
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=os.path.dirname(api_path)
@@ -150,17 +147,6 @@ class MCMODSearch:
         
         limit = self.config.config['max_multi_results'] if search_type == "all" else self.config.config['max_single_results']
         
-        # 获取API返回的名称长度限制（确保不超过配置值）
-        api_max_len = min(data.get("max_name_length", 50), self.config.config['max_name_length'])
-        
-        def format_name(name):
-            """应用双重长度限制（API端和本地配置）"""
-            name = str(name or '未知')
-            # 如果API已经截断过，则不需要再次截断
-            if '...' in name and name.endswith('...') and len(name.replace('...', '')) <= api_max_len:
-                return name
-            return name[:api_max_len] + ('...' if len(name) > api_max_len else '')
-        
         table = "| 类型 | 名称 | 链接 |\n|------|------|------|\n"
         
         if search_type == "all":
@@ -169,18 +155,17 @@ class MCMODSearch:
                 if items := results.get(stype, []):
                     part = f"【{stype_name}】\n{table}"
                     for item in items[:limit]:
-                        part += f"| {stype_name} | {format_name(item.get('name'))} | {item.get('url', '#')} |\n"
+                        part += f"| {stype_name} | {item.get('name', '未知')} | {item.get('url', '#')} |\n"
                     if len(items) > limit:
                         part += f"...共{len(items)}条结果\n"
                     parts.append(part)
             return "\n".join(parts) if parts else "没有找到任何结果"
         else:
             for item in results[:limit]:
-                table += f"| {self.SEARCH_TYPES.get(search_type, '未知')} | {format_name(item.get('name'))} | {item.get('url', '#')} |\n"
+                table += f"| {self.SEARCH_TYPES.get(search_type, '未知')} | {item.get('name', '未知')} | {item.get('url', '#')} |\n"
             if len(results) > limit:
                 table += f"...共{len(results)}条结果\n"
             return table
-    
 
 @register("MCMOD搜索插件", "mcmod", "MCMOD百科内容搜索", "1.0.0")
 class MCMODSearchPlugin(Star):

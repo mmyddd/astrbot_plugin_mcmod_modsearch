@@ -22,11 +22,10 @@ class MCMODSearchAPI:
     
     SearchType = Literal["mod", "modpack", "item", "post", "all"]
     
-    def __init__(self, max_name_length=50):
+    def __init__(self):
         self.seen_urls = set()
         self.app = web.Application()
         self._setup_routes()
-        self.max_name_length = max(10, min(100, max_name_length))  # 确保在10-100范围内
         
     def _setup_routes(self):
         self.app.router.add_get('/search', self.handle_search)
@@ -35,18 +34,11 @@ class MCMODSearchAPI:
     async def handle_status(self, request: web.Request) -> web.Response:
         return web.json_response({
             "status": "running",
-            "max_name_length": self.max_name_length,
             "supported_types": list(self.TYPE_PATTERNS.keys())
         })
 
     async def handle_search(self, request: web.Request) -> web.Response:
-        try:
-            if 'max_length' in request.query:
-                try:
-                    self.max_name_length = max(10, min(100, int(request.query['max_length'])))
-                except ValueError:
-                    pass
-                    
+        try:                    
             query, search_type = self._get_query_params(request)
             if not query:
                 return self._error_response("需要提供查询参数", 400)
@@ -103,7 +95,7 @@ class MCMODSearchAPI:
                         results.append(data)
         
         return results
-    
+
     def _process_link(self, link) -> Optional[tuple[str, Dict]]:
         if not (url := self._normalize_url(link.get('href', ''))):
             return None
@@ -115,13 +107,12 @@ class MCMODSearchAPI:
             if pattern in url:
                 self.seen_urls.add(url)
                 name = link.get_text(strip=True)
-                # 确保使用self.max_name_length进行截断
                 return (type_, {
-                    "name": (name[:self.max_name_length] + '...') if len(name) > self.max_name_length else name,
+                    "name": name,  # 直接返回完整名称
                     "url": url
                 })
         return None
-    
+
     def _normalize_url(self, url: str) -> str:
         return f"https://www.mcmod.cn{url}" if url and not url.startswith(('http://', 'https://')) else url
 
@@ -136,8 +127,7 @@ class MCMODSearchAPI:
             "status": "success",
             "query": query,
             "type": search_type,
-            "results": results,
-            "max_name_length": self.max_name_length
+            "results": results
         }
         
         if search_type == "all":
@@ -182,10 +172,7 @@ if __name__ == "__main__":
         sys.exit(1)
         
     try:
-        port = int(sys.argv[1]) if len(sys.argv) > 1 else 15001
-        max_name_length = int(sys.argv[2]) if len(sys.argv) > 2 else 50
-        
-        api = MCMODSearchAPI(max_name_length=max_name_length)
-        asyncio.run(api.run(port=port))
+        api = MCMODSearchAPI()
+        asyncio.run(api.run())
     except KeyboardInterrupt:
         print("\n服务器已停止")
