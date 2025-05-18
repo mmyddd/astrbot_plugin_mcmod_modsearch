@@ -11,7 +11,7 @@ class MCMODSearchAPI:
     BASE_URL = "https://search.mcmod.cn/s"
     DOMAIN = "mcmod.cn"
     USER_AGENT = "Mozilla/5.0"
-    TIMEOUT = aiohttp.ClientTimeout(total=15)
+    DEFAULT_TIMEOUT = 15
     
     TYPE_PATTERNS = {
         "mod": "/class/",
@@ -22,7 +22,8 @@ class MCMODSearchAPI:
     
     SearchType = Literal["mod", "modpack", "item", "post", "all"]
     
-    def __init__(self):
+    def __init__(self, port=15001):
+        self.port = port
         self.seen_urls = set()
         self.app = web.Application()
         self._setup_routes()
@@ -34,6 +35,7 @@ class MCMODSearchAPI:
     async def handle_status(self, request: web.Request) -> web.Response:
         return web.json_response({
             "status": "running",
+            "port": self.port,
             "supported_types": list(self.TYPE_PATTERNS.keys())
         })
 
@@ -73,7 +75,7 @@ class MCMODSearchAPI:
                 self.BASE_URL,
                 params={"key": query, "filter": 0},
                 headers={"User-Agent": self.USER_AGENT},
-                timeout=self.TIMEOUT
+                timeout=aiohttp.ClientTimeout(total=self.DEFAULT_TIMEOUT)
             ) as response:
                 response.raise_for_status()
                 return await response.text()
@@ -108,7 +110,7 @@ class MCMODSearchAPI:
                 self.seen_urls.add(url)
                 name = link.get_text(strip=True)
                 return (type_, {
-                    "name": name,  # 直接返回完整名称
+                    "name": name,
                     "url": url
                 })
         return None
@@ -118,9 +120,9 @@ class MCMODSearchAPI:
 
     def _should_filter(self, url: str) -> bool:
         parsed = urlparse(url)
-        return (not parsed.netloc.endswith(self.DOMAIN) or
-                re.search(r'mcmod\.cn//.*mcmod\.cn', url) or
-                '/class/category/' in url)
+        return (not parsed.netloc.endswith(self.DOMAIN)) or \
+                bool(re.search(r'mcmod\.cn//.*mcmod\.cn', url)) or \
+                '/class/category/' in url
 
     def _success_response(self, query: str, results: Dict | List, search_type: str) -> web.Response:
         data = {
@@ -143,36 +145,33 @@ class MCMODSearchAPI:
             "message": message
         }, status=status)
 
-    async def run(self, host: str = '0.0.0.0', port: int = 15001) -> None:
-        print(f"\nMCMOD搜索API服务已启动\n访问地址:")
+    async def run(self, host: str = '0.0.0.0') -> None:
+        print(f"\nMCMOD搜索API服务已启动\n端口: {self.port}\n访问地址:")
         for t in self.TYPE_PATTERNS:
-            print(f"- {t}搜索: http://{host}:{port}/search?{t}=名称")
-        print(f"- 全搜索: http://{host}:{port}/search?all=名称")
-        print(f"- 健康检查: http://{host}:{port}/status\n")
+            print(f"- {t}搜索: http://{host}:{self.port}/search?{t}=名称")
+        print(f"- 全搜索: http://{host}:{self.port}/search?all=名称")
+        print(f"- 健康检查: http://{host}:{self.port}/status\n")
         
         runner = web.AppRunner(self.app)
         await runner.setup()
-        site = web.TCPSite(runner, host, port)
+        site = web.TCPSite(runner, host, self.port)
         await site.start()
         
         while True:
             await asyncio.sleep(3600)
 
-def check_dependencies():
-    try:
-        import aiohttp
-        import bs4
-        return True
-    except ImportError:
-        return False
-
 if __name__ == "__main__":
-    if not check_dependencies():
-        print("请先安装依赖: pip install aiohttp beautifulsoup4")
-        sys.exit(1)
-        
+    if len(sys.argv) > 1:
+        try:
+            port = int(sys.argv[1])
+        except ValueError:
+            print("错误：端口必须是有效数字")
+            sys.exit(1)
+    else:
+        port = 15001
+    
     try:
-        api = MCMODSearchAPI()
+        api = MCMODSearchAPI(port=port)
         asyncio.run(api.run())
     except KeyboardInterrupt:
         print("\n服务器已停止")

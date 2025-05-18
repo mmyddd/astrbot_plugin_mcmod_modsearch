@@ -96,7 +96,7 @@ class MCMODSearch:
             asyncio.create_task(self._log_stream(self.api_process.stderr, "error"))
 
             if await self._check_api_ready():
-                logger.info("API服务启动成功")
+                logger.info(f"API服务启动成功，端口: {self.config.config['api_port']}")
                 self.api_ready.set()
             else:
                 logger.error("API服务启动超时")
