@@ -45,39 +45,44 @@ class MCMODSearchAPI:
 
     async def handle_search(self, request: web.Request) -> web.Response:
         try:                    
-            query, search_type = self._get_query_params(request)
+            query, search_type, page = await self._get_query_params(request)
             if not query:
                 return self._error_response("需要提供查询参数", 400)
                 
-            results = await (self._fetch_all_results(query) if search_type == "all" \
-                     else self._fetch_type_results(query, search_type))
+            results = await (self._fetch_all_results(query, page) if search_type == "all" \
+                     else self._fetch_type_results(query, search_type, page))
             
-            return self._success_response(query, results, search_type)
+            return self._success_response(query, results, search_type, page)
             
         except aiohttp.ClientError as e:
             return self._error_response(f"请求失败: {str(e)}", 502)
         except Exception as e:
             return self._error_response(f"服务器错误: {str(e)}", 500)
 
-    def _get_query_params(self, request: web.Request) -> tuple[str, str]:
+    async def _get_query_params(self, request: web.Request) -> tuple[str, str, int]:
+        try:
+            page = int(request.query.get("page", "1"))
+        except ValueError:
+            page = 1
+            
         for param in (*self.TYPE_PATTERNS, "all"):
             if param in request.query:
-                return request.query[param], param
-        return "", "mod"
+                return request.query[param], param, page
+        return "", "mod", page
 
-    async def _fetch_all_results(self, query: str) -> Dict[str, List[Dict]]:
-        html = await self._fetch_search_page(query)
+    async def _fetch_all_results(self, query: str, page: int = 1) -> Dict[str, List[Dict]]:
+        html = await self._fetch_search_page(query, page)
         return self._parse_results(html, group_by_type=True)
 
-    async def _fetch_type_results(self, query: str, search_type: str) -> List[Dict]:
-        html = await self._fetch_search_page(query)
+    async def _fetch_type_results(self, query: str, search_type: str, page: int = 1) -> List[Dict]:
+        html = await self._fetch_search_page(query, page)
         return self._parse_results(html, target_type=search_type)
 
-    async def _fetch_search_page(self, query: str) -> str:
+    async def _fetch_search_page(self, query: str, page: int = 1) -> str:
         async with aiohttp.ClientSession() as session:
             async with session.get(
                 self.BASE_URL,
-                params={"key": query, "filter": 0},
+                params={"key": query, "filter": 0, "page": page},
                 headers={"User-Agent": self.USER_AGENT},
                 timeout=self.TIMEOUT
             ) as response:
@@ -128,11 +133,12 @@ class MCMODSearchAPI:
                 bool(re.search(r'mcmod\.cn//.*mcmod\.cn', url)) or \
                 '/class/category/' in url
 
-    def _success_response(self, query: str, results: Dict | List, search_type: str) -> web.Response:
+    def _success_response(self, query: str, results: Dict | List, search_type: str, page: int) -> web.Response:
         data = {
             "status": "success",
             "query": query,
             "type": search_type,
+            "page": page,
             "results": results
         }
         
@@ -154,8 +160,8 @@ class MCMODSearchAPI:
         print(f"端口: {self.port}")
         print(f"访问地址:")
         for t in self.TYPE_PATTERNS:
-            print(f"- {t}搜索: http://{host}:{self.port}/search?{t}=名称")
-        print(f"- 全搜索: http://{host}:{self.port}/search?all=名称")
+            print(f"- {t}搜索: http://{host}:{self.port}/search?{t}=名称&page=页码")
+        print(f"- 全搜索: http://{host}:{self.port}/search?all=名称&page=页码")
         print(f"- 健康检查: http://{host}:{self.port}/status\n")
         
         runner = web.AppRunner(self.app)

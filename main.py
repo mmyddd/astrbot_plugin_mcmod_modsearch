@@ -95,7 +95,7 @@ class MCMODSearch:
             finally:
                 self.api_process = None
 
-    async def search(self, search_type: str, query: str) -> dict:
+    async def search(self, search_type: str, query: str, page: int = 1) -> dict:
         """执行搜索请求"""
         if not self.api_ready.is_set():
             logger.warning("等待API服务就绪...")
@@ -105,10 +105,12 @@ class MCMODSearch:
             timeout = aiohttp.ClientTimeout(total=API_TIMEOUT)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(
-                    f"{self.api_base_url}/search?{search_type}={query}"
+                    f"{self.api_base_url}/search?{search_type}={query}&page={page}"
                 ) as response:
                     response.raise_for_status()
-                    return await response.json()
+                    data = await response.json()
+                    data["current_page"] = page  # 添加当前页码信息
+                    return data
         except Exception as e:
             logger.error(f"搜索请求失败: {e}")
             return {"status": "error", "message": str(e)}
@@ -122,22 +124,25 @@ class MCMODSearch:
         if not results:
             return f"没有找到相关{self.SEARCH_TYPES.get(search_type, '')}结果"
         
-        table_header = "| 名称 | 链接 |\n|------|------|\n"
+        current_page = data.get("current_page", 1)
+        page_info = f"\n当前第 {current_page} 页"
+        navigation = "\n使用【.查物品 扳手 2】查看第2页结果" if search_type == "item" else \
+                   f"\n使用【.mcmod搜索 {data['query']} 2】查看第2页结果"
         
         if search_type == "all":
             parts = []
             for stype, stype_name in self.SEARCH_TYPES.items():
                 if items := results.get(stype, []):
-                    part = f"【{stype_name}】\n{table_header}"
+                    part = f"【{stype_name}】\n| 名称 | 链接 |\n|------|------|\n"
                     for item in items:
                         part += f"| {item.get('name', '未知')} | {item.get('url', '#')} |\n"
                     parts.append(part)
-            return "\n".join(parts) if parts else "没有找到任何结果"
+            return "\n".join(parts) + page_info + navigation if parts else "没有找到任何结果"
         else:
-            output = table_header
+            output = "| 名称 | 链接 |\n|------|------|\n"
             for item in results:
                 output += f"| {item.get('name', '未知')} | {item.get('url', '#')} |\n"
-            return output
+            return output + page_info + navigation
 
 @register("MCMOD搜索插件", "mcmod", "MCMOD百科内容搜索", "1.0.0")
 class MCMODSearchPlugin(Star):
@@ -147,28 +152,33 @@ class MCMODSearchPlugin(Star):
         asyncio.create_task(self.searcher.start_api_server())
 
     @filter.command("查mod")
-    async def search_mod(self, event: AstrMessageEvent, name: str):
-        result = await self.searcher.search("mod", name)
+    async def search_mod(self, event: AstrMessageEvent, name: str, page: int = 1):
+        """查mod [名称] [页码]"""
+        result = await self.searcher.search("mod", name, page)
         yield event.chain_result([Plain(self.searcher.format_results(result, "mod"))])
 
     @filter.command("查整合包")
-    async def search_modpack(self, event: AstrMessageEvent, name: str):
-        result = await self.searcher.search("modpack", name)
+    async def search_modpack(self, event: AstrMessageEvent, name: str, page: int = 1):
+        """查整合包 [名称] [页码]"""
+        result = await self.searcher.search("modpack", name, page)
         yield event.chain_result([Plain(self.searcher.format_results(result, "modpack"))])
 
     @filter.command("查物品")
-    async def search_item(self, event: AstrMessageEvent, name: str):
-        result = await self.searcher.search("item", name)
+    async def search_item(self, event: AstrMessageEvent, name: str, page: int = 1):
+        """查物品 [名称] [页码]"""
+        result = await self.searcher.search("item", name, page)
         yield event.chain_result([Plain(self.searcher.format_results(result, "item"))])
 
     @filter.command("查教程")
-    async def search_post(self, event: AstrMessageEvent, name: str):
-        result = await self.searcher.search("post", name)
+    async def search_post(self, event: AstrMessageEvent, name: str, page: int = 1):
+        """查教程 [名称] [页码]"""
+        result = await self.searcher.search("post", name, page)
         yield event.chain_result([Plain(self.searcher.format_results(result, "post"))])
 
     @filter.command("mcmod搜索")
-    async def search_all(self, event: AstrMessageEvent, name: str):
-        result = await self.searcher.search("all", name)
+    async def search_all(self, event: AstrMessageEvent, name: str, page: int = 1):
+        """mcmod搜索 [名称] [页码]"""
+        result = await self.searcher.search("all", name, page)
         yield event.chain_result([Plain(self.searcher.format_results(result, "all"))])
 
     async def terminate(self):
