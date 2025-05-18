@@ -133,7 +133,7 @@ class MCMODSearch:
                 table += f"...共{len(results)}条结果\n"
             return table
 
-@register("MCMOD搜索插件", "mcmod", "MCMOD百科内容搜索", "2.0.0")
+@register("MCMOD搜索插件", "mcmod", "MCMOD百科内容搜索", "1.0.0")
 class MCMODSearchPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
