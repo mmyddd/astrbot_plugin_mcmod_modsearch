@@ -17,7 +17,7 @@ class MCMODSearchAPI:
         "mod": "/class/",
         "modpack": "/modpack/",
         "item": "/item/",
-        "post": "/post/"
+        "post": "/教程/"  # 修改为"教程"
     }
     
     SearchType = Literal["mod", "modpack", "item", "post", "all"]
@@ -26,18 +26,24 @@ class MCMODSearchAPI:
         self.seen_urls = set()
         self.app = web.Application()
         self._setup_routes()
+        self.max_name_length = 100  # 默认值，可通过API参数覆盖
         
     def _setup_routes(self):
         self.app.router.add_get('/search', self.handle_search)
         self.app.router.add_get('/status', self.handle_status)
         
     async def handle_status(self, request: web.Request) -> web.Response:
-        """健康检查端点"""
-        return web.json_response({"status": "running"})
+        return web.json_response({"status": "running", "max_name_length": self.max_name_length})
 
     async def handle_search(self, request: web.Request) -> web.Response:
-        """处理搜索请求"""
         try:
+            # 获取名称长度参数
+            if 'max_length' in request.query:
+                try:
+                    self.max_name_length = max(10, min(200, int(request.query['max_length'])))
+                except ValueError:
+                    pass
+                    
             query, search_type = self._get_query_params(request)
             if not query:
                 return self._error_response("需要提供查询参数", 400)
@@ -50,26 +56,22 @@ class MCMODSearchAPI:
             return self._error_response(f"请求失败: {str(e)}", 502)
         except Exception as e:
             return self._error_response(f"服务器错误: {str(e)}", 500)
-    
+
     def _get_query_params(self, request: web.Request) -> tuple[str, str]:
-        """提取查询参数和类型"""
         for param in (*self.TYPE_PATTERNS, "all"):
             if param in request.query:
                 return request.query[param], param
         return "", "mod"
 
     async def _fetch_all_results(self, query: str) -> Dict[str, List[Dict]]:
-        """获取所有类型结果"""
         html = await self._fetch_search_page(query)
         return self._parse_results(html, group_by_type=True)
 
     async def _fetch_type_results(self, query: str, search_type: str) -> List[Dict]:
-        """获取特定类型结果"""
         html = await self._fetch_search_page(query)
         return self._parse_results(html, target_type=search_type)
 
     async def _fetch_search_page(self, query: str) -> str:
-        """获取搜索页面HTML"""
         async with aiohttp.ClientSession() as session:
             async with session.get(
                 self.BASE_URL,
@@ -83,7 +85,6 @@ class MCMODSearchAPI:
     def _parse_results(self, html: str, 
                       group_by_type: bool = False,
                       target_type: Optional[str] = None) -> Dict[str, List[Dict]] | List[Dict]:
-        """解析搜索结果"""
         self.seen_urls.clear()
         soup = BeautifulSoup(html, 'html.parser')
         results = {t: [] for t in self.TYPE_PATTERNS} if group_by_type else []
@@ -99,7 +100,6 @@ class MCMODSearchAPI:
         return results
 
     def _process_link(self, link) -> Optional[tuple[str, Dict]]:
-        """处理单个链接"""
         if not (url := self._normalize_url(link.get('href', ''))):
             return None
             
@@ -109,30 +109,30 @@ class MCMODSearchAPI:
         for type_, pattern in self.TYPE_PATTERNS.items():
             if pattern in url:
                 self.seen_urls.add(url)
+                name = link.get_text(strip=True)
                 return (type_, {
-                    "name": link.get_text(strip=True)[:50] or f"未命名{type_}",
+                    # 使用配置的长度限制
+                    "name": (name[:self.max_name_length] + '...') if len(name) > self.max_name_length else name,
                     "url": url
                 })
         return None
 
     def _normalize_url(self, url: str) -> str:
-        """规范化URL"""
         return f"https://www.mcmod.cn{url}" if url and not url.startswith(('http://', 'https://')) else url
 
     def _should_filter(self, url: str) -> bool:
-        """URL过滤检查"""
         parsed = urlparse(url)
         return (not parsed.netloc.endswith(self.DOMAIN) or
                 re.search(r'mcmod\.cn//.*mcmod\.cn', url) or
                 '/class/category/' in url)
 
     def _success_response(self, query: str, results: Dict | List, search_type: str) -> web.Response:
-        """构建成功响应"""
         data = {
             "status": "success",
             "query": query,
             "type": search_type,
-            "results": results
+            "results": results,
+            "max_name_length": self.max_name_length  # 返回当前使用的长度限制
         }
         
         if search_type == "all":
@@ -143,17 +143,15 @@ class MCMODSearchAPI:
         return web.json_response(data)
 
     def _error_response(self, message: str, status: int) -> web.Response:
-        """构建错误响应"""
         return web.json_response({
             "status": "error",
             "message": message
         }, status=status)
 
     async def run(self, host: str = '0.0.0.0', port: int = 15001) -> None:
-        """启动服务器"""
         print(f"\nMCMOD搜索API服务已启动\n访问地址:")
         for t in (*self.TYPE_PATTERNS, "all"):
-            print(f"- {t}搜索: http://{host}:{port}/search?{t}=名称")
+            print(f"- {t}搜索: http://{host}:{port}/search?{t}=名称&max_length=100")
         print(f"- 健康检查: http://{host}:{port}/status\n")
         
         runner = web.AppRunner(self.app)
@@ -161,12 +159,10 @@ class MCMODSearchAPI:
         site = web.TCPSite(runner, host, port)
         await site.start()
         
-        # 保持服务器运行
         while True:
             await asyncio.sleep(3600)
 
 def check_dependencies():
-    """检查必要依赖"""
     try:
         import aiohttp
         import bs4
