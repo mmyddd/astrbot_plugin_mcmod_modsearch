@@ -1,0 +1,32 @@
+{
+    "api_port": {
+        "description": "API服务运行的端口号",
+        "type": "number",
+        "hint": "请输入1024-65535之间的端口号",
+        "default": 15001
+    },
+    "max_single_results": {
+        "description": "单类型搜索最大显示结果数",
+        "type": "number",
+        "hint": "请输入1-50之间的数字",
+        "default": 20
+    },
+    "max_multi_results": {
+        "description": "全搜索中各类型最大显示结果数",
+        "type": "number",
+        "hint": "请输入1-20之间的数字",
+        "default": 10
+    },
+    "api_timeout": {
+        "description": "API请求超时时间(秒)",
+        "type": "number",
+        "hint": "请输入5-30之间的数字",
+        "default": 15
+    },
+    "enable_all_search": {
+        "description": "是否启用全搜索功能",
+        "type": "boolean",
+        "hint": "true或false",
+        "default": true
+    }
+}
