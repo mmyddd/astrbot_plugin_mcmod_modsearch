@@ -7,27 +7,27 @@ import asyncio
 from typing import Dict, List, Optional, Literal
 import sys
 
+# ===== 配置区域 =====
+PORT = 15001  # 在此修改API服务端口
+# ===================
+
 class MCMODSearchAPI:
     BASE_URL = "https://search.mcmod.cn/s"
     DOMAIN = "mcmod.cn"
     USER_AGENT = "Mozilla/5.0"
-    DEFAULT_TIMEOUT = 15
+    TIMEOUT = aiohttp.ClientTimeout(total=15)
     
     TYPE_PATTERNS = {
         "mod": "/class/",
-        "modpack": "/modpack/", 
+        "modpack": "/modpack/",
         "item": "/item/",
         "post": "/post/"
     }
     
     SearchType = Literal["mod", "modpack", "item", "post", "all"]
     
-    def __init__(self, port: int = 15001):
-        """初始化API服务
-        Args:
-            port: 服务运行的端口号，默认15001
-        """
-        self.port = port
+    def __init__(self):
+        self.port = PORT
         self.seen_urls = set()
         self.app = web.Application()
         self._setup_routes()
@@ -44,12 +44,12 @@ class MCMODSearchAPI:
         })
 
     async def handle_search(self, request: web.Request) -> web.Response:
-        try:
+        try:                    
             query, search_type = self._get_query_params(request)
             if not query:
                 return self._error_response("需要提供查询参数", 400)
                 
-            results = await (self._fetch_all_results(query) if search_type == "all" 
+            results = await (self._fetch_all_results(query) if search_type == "all" \
                      else self._fetch_type_results(query, search_type))
             
             return self._success_response(query, results, search_type)
@@ -79,14 +79,14 @@ class MCMODSearchAPI:
                 self.BASE_URL,
                 params={"key": query, "filter": 0},
                 headers={"User-Agent": self.USER_AGENT},
-                timeout=aiohttp.ClientTimeout(total=self.DEFAULT_TIMEOUT)
+                timeout=self.TIMEOUT
             ) as response:
                 response.raise_for_status()
                 return await response.text()
 
     def _parse_results(self, html: str, 
-                     group_by_type: bool = False,
-                     target_type: Optional[str] = None) -> Dict[str, List[Dict]] | List[Dict]:
+                      group_by_type: bool = False,
+                      target_type: Optional[str] = None) -> Dict[str, List[Dict]] | List[Dict]:
         self.seen_urls.clear()
         soup = BeautifulSoup(html, 'html.parser')
         results = {t: [] for t in self.TYPE_PATTERNS} if group_by_type else []
@@ -125,8 +125,8 @@ class MCMODSearchAPI:
     def _should_filter(self, url: str) -> bool:
         parsed = urlparse(url)
         return (not parsed.netloc.endswith(self.DOMAIN)) or \
-               bool(re.search(r'mcmod\.cn//.*mcmod\.cn', url)) or \
-               '/class/category/' in url
+                bool(re.search(r'mcmod\.cn//.*mcmod\.cn', url)) or \
+                '/class/category/' in url
 
     def _success_response(self, query: str, results: Dict | List, search_type: str) -> web.Response:
         data = {
@@ -151,8 +151,12 @@ class MCMODSearchAPI:
 
     async def run(self, host: str = '0.0.0.0') -> None:
         print(f"\nMCMOD搜索API服务已启动")
-        print(f"运行端口: {self.port}")
-        print(f"访问地址: http://{host}:{self.port}/search?[类型]=查询词\n")
+        print(f"端口: {self.port}")
+        print(f"访问地址:")
+        for t in self.TYPE_PATTERNS:
+            print(f"- {t}搜索: http://{host}:{self.port}/search?{t}=名称")
+        print(f"- 全搜索: http://{host}:{self.port}/search?all=名称")
+        print(f"- 健康检查: http://{host}:{self.port}/status\n")
         
         runner = web.AppRunner(self.app)
         await runner.setup()
@@ -163,16 +167,12 @@ class MCMODSearchAPI:
             await asyncio.sleep(3600)
 
 if __name__ == "__main__":
-    # 从命令行参数获取端口，没有则使用默认值15001
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 15001
-    
-    # 验证端口范围
-    if not 1024 <= port <= 65535:
+    if not 1024 <= PORT <= 65535:
         print("错误：端口必须在1024-65535之间")
         sys.exit(1)
     
     try:
-        api = MCMODSearchAPI(port=port)
+        api = MCMODSearchAPI()
         asyncio.run(api.run())
     except KeyboardInterrupt:
         print("\n服务器已停止")
