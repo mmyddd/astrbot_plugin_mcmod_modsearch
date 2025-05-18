@@ -17,16 +17,16 @@ class MCMODSearchAPI:
         "mod": "/class/",
         "modpack": "/modpack/",
         "item": "/item/",
-        "post": "/post/"  # 保持为post
+        "post": "/post/"
     }
     
     SearchType = Literal["mod", "modpack", "item", "post", "all"]
     
-    def __init__(self):
+    def __init__(self, max_name_length=50):
         self.seen_urls = set()
         self.app = web.Application()
         self._setup_routes()
-        self.max_name_length = 100
+        self.max_name_length = max(10, min(100, max_name_length))  # 确保在10-100范围内
         
     def _setup_routes(self):
         self.app.router.add_get('/search', self.handle_search)
@@ -36,14 +36,14 @@ class MCMODSearchAPI:
         return web.json_response({
             "status": "running",
             "max_name_length": self.max_name_length,
-            "supported_types": list(self.TYPE_PATTERNS.keys())  # 直接返回类型列表
+            "supported_types": list(self.TYPE_PATTERNS.keys())
         })
 
     async def handle_search(self, request: web.Request) -> web.Response:
         try:
             if 'max_length' in request.query:
                 try:
-                    self.max_name_length = max(10, min(200, int(request.query['max_length'])))
+                    self.max_name_length = max(10, min(100, int(request.query['max_length'])))
                 except ValueError:
                     pass
                     
@@ -181,7 +181,10 @@ if __name__ == "__main__":
         sys.exit(1)
         
     try:
-        api = MCMODSearchAPI()
-        asyncio.run(api.run())
+        port = int(sys.argv[1]) if len(sys.argv) > 1 else 15001
+        max_name_length = int(sys.argv[2]) if len(sys.argv) > 2 else 50
+        
+        api = MCMODSearchAPI(max_name_length=max_name_length)
+        asyncio.run(api.run(port=port))
     except KeyboardInterrupt:
         print("\n服务器已停止")

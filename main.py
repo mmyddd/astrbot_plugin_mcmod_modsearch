@@ -87,17 +87,17 @@ class MCMODSearch:
                 return
 
             self.api_process = await asyncio.create_subprocess_exec(
-                "python", api_path, str(self.config.config['api_port']),
+                "python", api_path, 
+                str(self.config.config['api_port']),
+                str(self.config.config['max_name_length']),  # 传递max_name_length参数
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=os.path.dirname(api_path)
             )
 
-            # 启动输出捕获任务
             asyncio.create_task(self._log_stream(self.api_process.stdout, "info"))
             asyncio.create_task(self._log_stream(self.api_process.stderr, "error"))
 
-            # 检查API状态
             if await self._check_api_ready():
                 logger.info("API服务启动成功")
                 self.api_ready.set()
@@ -140,7 +140,7 @@ class MCMODSearch:
             return {"status": "error", "message": str(e)}
 
     def format_results(self, data: dict, search_type: str) -> str:
-        """格式化搜索结果（应用max_name_length配置）"""
+        """格式化搜索结果"""
         if data.get("status") != "success":
             return f"搜索失败: {data.get('message', '未知错误')}"
         
@@ -149,12 +149,6 @@ class MCMODSearch:
             return f"没有找到相关{self.SEARCH_TYPES.get(search_type, '')}结果"
         
         limit = self.config.config['max_multi_results'] if search_type == "all" else self.config.config['max_single_results']
-        max_len = self.config.config['max_name_length']  # 直接从配置获取
-        
-        def format_name(name):
-            """格式化名称，应用max_name_length配置"""
-            name = str(name or '未知')
-            return name[:max_len] + ('...' if len(name) > max_len else '')
         
         table = "| 类型 | 名称 | 链接 |\n|------|------|------|\n"
         
@@ -164,16 +158,14 @@ class MCMODSearch:
                 if items := results.get(stype, []):
                     part = f"【{stype_name}】\n{table}"
                     for item in items[:limit]:
-                        name = format_name(item.get('name'))
-                        part += f"| {stype_name} | {name} | {item.get('url', '#')} |\n"
+                        part += f"| {stype_name} | {item.get('name', '未知')} | {item.get('url', '#')} |\n"
                     if len(items) > limit:
                         part += f"...共{len(items)}条结果\n"
                     parts.append(part)
             return "\n".join(parts) if parts else "没有找到任何结果"
         else:
             for item in results[:limit]:
-                name = format_name(item.get('name'))
-                table += f"| {self.SEARCH_TYPES.get(search_type, '未知')} | {name} | {item.get('url', '#')} |\n"
+                table += f"| {self.SEARCH_TYPES.get(search_type, '未知')} | {item.get('name', '未知')} | {item.get('url', '#')} |\n"
             if len(results) > limit:
                 table += f"...共{len(results)}条结果\n"
             return table
