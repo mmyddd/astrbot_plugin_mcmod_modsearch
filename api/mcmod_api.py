@@ -17,7 +17,7 @@ class MCMODSearchAPI:
         "mod": "/class/",
         "modpack": "/modpack/",
         "item": "/item/",
-        "post": "/教程/"  # 修改为"教程"
+        "post": "/post/"  # 保持为/post/而不是/教程/
     }
     
     SearchType = Literal["mod", "modpack", "item", "post", "all"]
@@ -26,18 +26,26 @@ class MCMODSearchAPI:
         self.seen_urls = set()
         self.app = web.Application()
         self._setup_routes()
-        self.max_name_length = 100  # 默认值，可通过API参数覆盖
+        self.max_name_length = 100
         
     def _setup_routes(self):
         self.app.router.add_get('/search', self.handle_search)
         self.app.router.add_get('/status', self.handle_status)
         
     async def handle_status(self, request: web.Request) -> web.Response:
-        return web.json_response({"status": "running", "max_name_length": self.max_name_length})
+        return web.json_response({
+            "status": "running",
+            "max_name_length": self.max_name_length,
+            "supported_types": {
+                "mod": "模组",
+                "modpack": "整合包",
+                "item": "物品",
+                "post": "教程"  # 这里显示为"教程"但实际URL匹配/post/
+            }
+        })
 
     async def handle_search(self, request: web.Request) -> web.Response:
         try:
-            # 获取名称长度参数
             if 'max_length' in request.query:
                 try:
                     self.max_name_length = max(10, min(200, int(request.query['max_length'])))
@@ -50,6 +58,13 @@ class MCMODSearchAPI:
                 
             results = await (self._fetch_all_results(query) if search_type == "all" \
                      else self._fetch_type_results(query, search_type))
+            
+            # 转换显示名称（post -> 教程）
+            if search_type == "post":
+                search_type = "教程"
+            elif isinstance(results, dict) and "post" in results:
+                results["教程"] = results.pop("post")
+                
             return self._success_response(query, results, search_type)
             
         except aiohttp.ClientError as e:
@@ -89,13 +104,14 @@ class MCMODSearchAPI:
         soup = BeautifulSoup(html, 'html.parser')
         results = {t: [] for t in self.TYPE_PATTERNS} if group_by_type else []
         
-        for link in soup.select('.search-result a[target="_blank"]'):
-            if result := self._process_link(link):
-                type_, data = result
-                if group_by_type:
-                    results[type_].append(data)
-                elif type_ == target_type:
-                    results.append(data)
+        for item in soup.find_all(class_='search-result'):
+            for link in item.find_all('a', {'target': '_blank'}):
+                if result := self._process_link(link):
+                    type_, data = result
+                    if group_by_type:
+                        results[type_].append(data)
+                    elif type_ == target_type:
+                        results.append(data)
         
         return results
 
@@ -111,7 +127,6 @@ class MCMODSearchAPI:
                 self.seen_urls.add(url)
                 name = link.get_text(strip=True)
                 return (type_, {
-                    # 使用配置的长度限制
                     "name": (name[:self.max_name_length] + '...') if len(name) > self.max_name_length else name,
                     "url": url
                 })
@@ -132,7 +147,7 @@ class MCMODSearchAPI:
             "query": query,
             "type": search_type,
             "results": results,
-            "max_name_length": self.max_name_length  # 返回当前使用的长度限制
+            "max_name_length": self.max_name_length
         }
         
         if search_type == "all":
@@ -150,8 +165,10 @@ class MCMODSearchAPI:
 
     async def run(self, host: str = '0.0.0.0', port: int = 15001) -> None:
         print(f"\nMCMOD搜索API服务已启动\n访问地址:")
-        for t in (*self.TYPE_PATTERNS, "all"):
-            print(f"- {t}搜索: http://{host}:{port}/search?{t}=名称&max_length=100")
+        for t in self.TYPE_PATTERNS:
+            display_name = "教程" if t == "post" else self.TYPE_PATTERNS[t].strip('/')
+            print(f"- {display_name}搜索: http://{host}:{port}/search?{t}=名称")
+        print(f"- 全搜索: http://{host}:{port}/search?all=名称")
         print(f"- 健康检查: http://{host}:{port}/status\n")
         
         runner = web.AppRunner(self.app)
