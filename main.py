@@ -57,8 +57,6 @@ class MCMODSearch:
         self.config = config
         self.api_process = None
         self.api_ready = asyncio.Event()
-        self.output_task = None
-        self.error_task = None
 
     async def _log_stream(self, stream, log_level):
         """实时记录子进程输出"""
@@ -67,13 +65,11 @@ class MCMODSearch:
             if not line:
                 break
             getattr(logger, log_level)(f"[API] {line.strip()}")
-            if "Application startup complete" in line:
-                self.api_ready.set()
 
     async def _check_api_ready(self):
         """检查API是否就绪"""
         timeout = aiohttp.ClientTimeout(total=2)
-        for _ in range(10):  # 最多尝试10次
+        for _ in range(10):
             try:
                 async with aiohttp.ClientSession(timeout=timeout) as session:
                     async with session.get(f"{self.config.api_base_url}/status"):
@@ -89,38 +85,30 @@ class MCMODSearch:
             if not os.path.exists(api_path):
                 logger.error(f"API脚本不存在: {api_path}")
                 return
-    
-            # 修正此处：补全create_subprocess_exec的括号
+
             self.api_process = await asyncio.create_subprocess_exec(
                 "python", api_path, str(self.config.config['api_port']),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=os.path.dirname(api_path)
-            )  # 这里补全了右括号
-            
+            )
+
             # 启动输出捕获任务
-            self.output_task = asyncio.create_task(
-                self._log_stream(self.api_process.stdout, "info"))
-            self.error_task = asyncio.create_task(
-                self._log_stream(self.api_process.stderr, "error"))
-    
-            # 检查API状态（增加超时保护）
-            try:
-                if await asyncio.wait_for(self._check_api_ready(), timeout=15):
-                    logger.info("API服务启动成功")
-                    self.api_ready.set()
-                else:
-                    logger.error("API服务启动超时")
-                    await self._safe_terminate()
-            except asyncio.TimeoutError:
-                logger.error("API状态检查超时")
+            asyncio.create_task(self._log_stream(self.api_process.stdout, "info"))
+            asyncio.create_task(self._log_stream(self.api_process.stderr, "error"))
+
+            # 检查API状态
+            if await self._check_api_ready():
+                logger.info("API服务启动成功")
+                self.api_ready.set()
+            else:
+                logger.error("API服务启动超时")
                 await self._safe_terminate()
-    
+
         except Exception as e:
-            logger.error(f"启动API服务出错: {str(e)}", exc_info=True)
+            logger.error(f"启动API服务出错: {e}")
             await self._safe_terminate()
-            raise  # 重新抛出异常以便上层捕获
-    
+
     async def _safe_terminate(self):
         """安全终止子进程"""
         if self.api_process:
@@ -132,10 +120,6 @@ class MCMODSearch:
                     self.api_process.kill()
                 except:
                     pass
-        if self.output_task:
-            self.output_task.cancel()
-        if self.error_task:
-            self.error_task.cancel()
 
     async def search(self, search_type: str, query: str) -> dict:
         """执行搜索请求"""
@@ -156,7 +140,7 @@ class MCMODSearch:
             return {"status": "error", "message": str(e)}
 
     def format_results(self, data: dict, search_type: str) -> str:
-        """格式化搜索结果"""
+        """格式化搜索结果（确保应用max_name_length配置）"""
         if data.get("status") != "success":
             return f"搜索失败: {data.get('message', '未知错误')}"
         
@@ -165,7 +149,12 @@ class MCMODSearch:
             return f"没有找到相关{self.SEARCH_TYPES.get(search_type, '')}结果"
         
         limit = self.config.config['max_multi_results'] if search_type == "all" else self.config.config['max_single_results']
-        max_len = self.config.config['max_name_length']
+        max_len = int(self.config.config['max_name_length'])
+        
+        def format_name(name):
+            name = str(name or '未知')
+            return name[:max_len] + ('...' if len(name) > max_len else '')
+        
         table = "| 类型 | 名称 | 链接 |\n|------|------|------|\n"
         
         if search_type == "all":
@@ -174,19 +163,21 @@ class MCMODSearch:
                 if items := results.get(stype, []):
                     part = f"【{stype_name}】\n{table}"
                     for item in items[:limit]:
-                        part += f"| {stype_name} | {item.get('name', '未知')[:max_len]} | {item.get('url', '#')} |\n"
+                        name = format_name(item.get('name'))
+                        part += f"| {stype_name} | {name} | {item.get('url', '#')} |\n"
                     if len(items) > limit:
                         part += f"...共{len(items)}条结果\n"
                     parts.append(part)
             return "\n".join(parts) if parts else "没有找到任何结果"
         else:
             for item in results[:limit]:
-                table += f"| {self.SEARCH_TYPES.get(search_type, '未知')} | {item.get('name', '未知')[:max_len]} | {item.get('url', '#')} |\n"
+                name = format_name(item.get('name'))
+                table += f"| {self.SEARCH_TYPES.get(search_type, '未知')} | {name} | {item.get('url', '#')} |\n"
             if len(results) > limit:
                 table += f"...共{len(results)}条结果\n"
             return table
 
-@register("MCMOD搜索插件", "mcmod", "MCMOD百科内容搜索", "2.1.0")
+@register("MCMOD搜索插件", "mcmod", "MCMOD百科内容搜索", "1.0.0")
 class MCMODSearchPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
