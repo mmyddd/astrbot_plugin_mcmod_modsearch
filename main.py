@@ -33,6 +33,7 @@ class PluginConfig:
 
     def _validate_config(self):
         """验证并修正配置值"""
+        # 确保端口在有效范围内
         self.config["api_port"] = max(1024, min(65535, self.config["api_port"]))
         self.config["max_single_results"] = max(1, min(50, self.config["max_single_results"]))
         self.config["max_multi_results"] = max(1, min(20, self.config["max_multi_results"]))
@@ -62,7 +63,7 @@ class MCMODSearch:
             line = await stream.readline()
             if not line:
                 break
-            getattr(logger, log_level)(f"[API] {line.strip()}")
+            logger.log(log_level, f"[API] {line.decode().strip()}")
 
     async def _check_api_ready(self):
         """检查API是否就绪"""
@@ -72,7 +73,8 @@ class MCMODSearch:
                 async with aiohttp.ClientSession(timeout=timeout) as session:
                     async with session.get(f"{self.config.api_base_url}/status"):
                         return True
-            except:
+            except Exception as e:
+                logger.debug(f"API检查失败: {str(e)}")
                 await asyncio.sleep(1)
         return False
 
@@ -84,16 +86,18 @@ class MCMODSearch:
                 logger.error(f"API脚本不存在: {api_path}")
                 return
 
+            # 启动API服务并传递配置的端口号
             self.api_process = await asyncio.create_subprocess_exec(
-                "python", api_path, 
+                sys.executable, api_path,
                 str(self.config.config['api_port']),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 cwd=os.path.dirname(api_path)
             )
 
-            asyncio.create_task(self._log_stream(self.api_process.stdout, "info"))
-            asyncio.create_task(self._log_stream(self.api_process.stderr, "error"))
+            # 捕获输出
+            asyncio.create_task(self._log_stream(self.api_process.stdout, "INFO"))
+            asyncio.create_task(self._log_stream(self.api_process.stderr, "ERROR"))
 
             if await self._check_api_ready():
                 logger.info(f"API服务启动成功，端口: {self.config.config['api_port']}")
@@ -117,6 +121,8 @@ class MCMODSearch:
                     self.api_process.kill()
                 except:
                     pass
+            finally:
+                self.api_process = None
 
     async def search(self, search_type: str, query: str) -> dict:
         """执行搜索请求"""

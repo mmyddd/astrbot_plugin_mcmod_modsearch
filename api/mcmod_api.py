@@ -15,14 +15,18 @@ class MCMODSearchAPI:
     
     TYPE_PATTERNS = {
         "mod": "/class/",
-        "modpack": "/modpack/",
+        "modpack": "/modpack/", 
         "item": "/item/",
         "post": "/post/"
     }
     
     SearchType = Literal["mod", "modpack", "item", "post", "all"]
     
-    def __init__(self, port=15001):
+    def __init__(self, port: int = 15001):
+        """初始化API服务
+        Args:
+            port: 服务运行的端口号，默认15001
+        """
         self.port = port
         self.seen_urls = set()
         self.app = web.Application()
@@ -40,12 +44,12 @@ class MCMODSearchAPI:
         })
 
     async def handle_search(self, request: web.Request) -> web.Response:
-        try:                    
+        try:
             query, search_type = self._get_query_params(request)
             if not query:
                 return self._error_response("需要提供查询参数", 400)
                 
-            results = await (self._fetch_all_results(query) if search_type == "all" \
+            results = await (self._fetch_all_results(query) if search_type == "all" 
                      else self._fetch_type_results(query, search_type))
             
             return self._success_response(query, results, search_type)
@@ -81,8 +85,8 @@ class MCMODSearchAPI:
                 return await response.text()
 
     def _parse_results(self, html: str, 
-                      group_by_type: bool = False,
-                      target_type: Optional[str] = None) -> Dict[str, List[Dict]] | List[Dict]:
+                     group_by_type: bool = False,
+                     target_type: Optional[str] = None) -> Dict[str, List[Dict]] | List[Dict]:
         self.seen_urls.clear()
         soup = BeautifulSoup(html, 'html.parser')
         results = {t: [] for t in self.TYPE_PATTERNS} if group_by_type else []
@@ -121,8 +125,8 @@ class MCMODSearchAPI:
     def _should_filter(self, url: str) -> bool:
         parsed = urlparse(url)
         return (not parsed.netloc.endswith(self.DOMAIN)) or \
-                bool(re.search(r'mcmod\.cn//.*mcmod\.cn', url)) or \
-                '/class/category/' in url
+               bool(re.search(r'mcmod\.cn//.*mcmod\.cn', url)) or \
+               '/class/category/' in url
 
     def _success_response(self, query: str, results: Dict | List, search_type: str) -> web.Response:
         data = {
@@ -146,11 +150,9 @@ class MCMODSearchAPI:
         }, status=status)
 
     async def run(self, host: str = '0.0.0.0') -> None:
-        print(f"\nMCMOD搜索API服务已启动\n端口: {self.port}\n访问地址:")
-        for t in self.TYPE_PATTERNS:
-            print(f"- {t}搜索: http://{host}:{self.port}/search?{t}=名称")
-        print(f"- 全搜索: http://{host}:{self.port}/search?all=名称")
-        print(f"- 健康检查: http://{host}:{self.port}/status\n")
+        print(f"\nMCMOD搜索API服务已启动")
+        print(f"运行端口: {self.port}")
+        print(f"访问地址: http://{host}:{self.port}/search?[类型]=查询词\n")
         
         runner = web.AppRunner(self.app)
         await runner.setup()
@@ -161,14 +163,13 @@ class MCMODSearchAPI:
             await asyncio.sleep(3600)
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        try:
-            port = int(sys.argv[1])
-        except ValueError:
-            print("错误：端口必须是有效数字")
-            sys.exit(1)
-    else:
-        port = 15001
+    # 从命令行参数获取端口，没有则使用默认值15001
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 15001
+    
+    # 验证端口范围
+    if not 1024 <= port <= 65535:
+        print("错误：端口必须在1024-65535之间")
+        sys.exit(1)
     
     try:
         api = MCMODSearchAPI(port=port)
