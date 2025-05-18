@@ -17,7 +17,7 @@ class MCMODSearchAPI:
         "mod": "/class/",
         "modpack": "/modpack/",
         "item": "/item/",
-        "post": "/post/"  # 保持为/post/而不是/教程/
+        "post": "/post/"  # 保持为post
     }
     
     SearchType = Literal["mod", "modpack", "item", "post", "all"]
@@ -36,12 +36,7 @@ class MCMODSearchAPI:
         return web.json_response({
             "status": "running",
             "max_name_length": self.max_name_length,
-            "supported_types": {
-                "mod": "模组",
-                "modpack": "整合包",
-                "item": "物品",
-                "post": "教程"  # 这里显示为"教程"但实际URL匹配/post/
-            }
+            "supported_types": list(self.TYPE_PATTERNS.keys())  # 直接返回类型列表
         })
 
     async def handle_search(self, request: web.Request) -> web.Response:
@@ -59,12 +54,6 @@ class MCMODSearchAPI:
             results = await (self._fetch_all_results(query) if search_type == "all" \
                      else self._fetch_type_results(query, search_type))
             
-            # 转换显示名称（post -> 教程）
-            if search_type == "post":
-                search_type = "教程"
-            elif isinstance(results, dict) and "post" in results:
-                results["教程"] = results.pop("post")
-                
             return self._success_response(query, results, search_type)
             
         except aiohttp.ClientError as e:
@@ -166,8 +155,7 @@ class MCMODSearchAPI:
     async def run(self, host: str = '0.0.0.0', port: int = 15001) -> None:
         print(f"\nMCMOD搜索API服务已启动\n访问地址:")
         for t in self.TYPE_PATTERNS:
-            display_name = "教程" if t == "post" else self.TYPE_PATTERNS[t].strip('/')
-            print(f"- {display_name}搜索: http://{host}:{port}/search?{t}=名称")
+            print(f"- {t}搜索: http://{host}:{port}/search?{t}=名称")
         print(f"- 全搜索: http://{host}:{port}/search?all=名称")
         print(f"- 健康检查: http://{host}:{port}/status\n")
         
