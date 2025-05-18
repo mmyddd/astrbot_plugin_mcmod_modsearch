@@ -2,6 +2,7 @@ import aiohttp
 import os
 import asyncio
 import subprocess
+import sys
 from astrbot.api import logger
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
