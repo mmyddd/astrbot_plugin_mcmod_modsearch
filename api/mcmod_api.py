@@ -103,7 +103,7 @@ class MCMODSearchAPI:
                         results.append(data)
         
         return results
-
+    
     def _process_link(self, link) -> Optional[tuple[str, Dict]]:
         if not (url := self._normalize_url(link.get('href', ''))):
             return None
@@ -115,12 +115,13 @@ class MCMODSearchAPI:
             if pattern in url:
                 self.seen_urls.add(url)
                 name = link.get_text(strip=True)
+                # 确保使用self.max_name_length进行截断
                 return (type_, {
                     "name": (name[:self.max_name_length] + '...') if len(name) > self.max_name_length else name,
                     "url": url
                 })
         return None
-
+    
     def _normalize_url(self, url: str) -> str:
         return f"https://www.mcmod.cn{url}" if url and not url.startswith(('http://', 'https://')) else url
 
