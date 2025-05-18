@@ -23,6 +23,12 @@
         "hint": "请输入5-30之间的数字",
         "default": 15
     },
+    "max_name_length": {
+        "description": "名称显示的最大字数",
+        "type": "int",
+        "hint": "请输入10-100之间的数字",
+        "default": 50
+    },
     "enable_all_search": {
         "description": "是否启用全搜索功能",
         "type": "bool",

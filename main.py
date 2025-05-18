@@ -23,7 +23,8 @@ class PluginConfig:
             "max_single_results": int(raw_config.get("max_single_results", 20)),
             "max_multi_results": int(raw_config.get("max_multi_results", 10)),
             "api_timeout": int(raw_config.get("api_timeout", 15)),
-            "enable_all_search": self._to_bool(raw_config.get("enable_all_search", True))
+            "enable_all_search": self._to_bool(raw_config.get("enable_all_search", True)),
+            "max_name_length": int(raw_config.get("max_name_length", 50))
         }
 
     def _to_bool(self, value):
@@ -41,6 +42,8 @@ class PluginConfig:
         self.config["max_multi_results"] = max(1, min(20, self.config["max_multi_results"]))
         # 超时时间验证
         self.config["api_timeout"] = max(5, min(30, self.config["api_timeout"]))
+        # 名称长度验证
+        self.config["max_name_length"] = max(10, min(100, self.config["max_name_length"]))
 
     @property
     def api_base_url(self):
@@ -52,7 +55,7 @@ class MCMODSearch:
         "mod": "模组",
         "modpack": "整合包", 
         "item": "物品",
-        "post": "插件"
+        "post": "教程"  # 修改为"教程"
     }
 
     def __init__(self, config: PluginConfig):
@@ -109,6 +112,7 @@ class MCMODSearch:
             return f"没有找到相关{self.SEARCH_TYPES.get(search_type, '')}结果"
         
         limit = self.config.config['max_multi_results'] if search_type == "all" else self.config.config['max_single_results']
+        max_len = self.config.config['max_name_length']
         table = "| 类型 | 名称 | 链接 |\n|------|------|------|\n"
         
         if search_type == "all":
@@ -117,14 +121,14 @@ class MCMODSearch:
                 if items := results.get(stype, []):
                     part = f"【{stype_name}】\n{table}"
                     for item in items[:limit]:
-                        part += f"| {stype_name} | {item.get('name', '未知')[:50]} | {item.get('url', '#')} |\n"
+                        part += f"| {stype_name} | {item.get('name', '未知')[:max_len]} | {item.get('url', '#')} |\n"
                     if len(items) > limit:
                         part += f"...共{len(items)}条结果\n"
                     parts.append(part)
             return "\n".join(parts) if parts else "没有找到任何结果"
         else:
             for item in results[:limit]:
-                table += f"| {self.SEARCH_TYPES.get(search_type, '未知')} | {item.get('name', '未知')[:50]} | {item.get('url', '#')} |\n"
+                table += f"| {self.SEARCH_TYPES.get(search_type, '未知')} | {item.get('name', '未知')[:max_len]} | {item.get('url', '#')} |\n"
             if len(results) > limit:
                 table += f"...共{len(results)}条结果\n"
             return table
@@ -152,7 +156,7 @@ class MCMODSearchPlugin(Star):
         result = await self.searcher.search("item", name)
         yield event.chain_result([Plain(self.searcher.format_results(result, "item"))])
 
-    @filter.command("查教程")
+    @filter.command("查教程")  # 修改为"查教程"
     async def search_post(self, event: AstrMessageEvent, name: str):
         result = await self.searcher.search("post", name)
         yield event.chain_result([Plain(self.searcher.format_results(result, "post"))])
