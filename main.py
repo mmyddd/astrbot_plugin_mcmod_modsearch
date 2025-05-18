@@ -3,17 +3,43 @@ import os
 import asyncio
 import subprocess
 import sys
+import json
+from pathlib import Path
 from astrbot.api import logger
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api.message_components import Plain
 
-# ===== 配置区域 =====
-PORT = 15001  # 必须与mcmod_api.py中的端口一致
-MAX_SINGLE_RESULTS = 20
-MAX_MULTI_RESULTS = 10
-API_TIMEOUT = 15
-ENABLE_ALL_SEARCH = True
+# ===== 配置处理 =====
+CONFIG_FILE = Path(__file__).parent / "mcmod_config.json"
+
+def load_config():
+    """加载并验证配置文件"""
+    default_config = {
+        "max_single_results": 20,
+        "max_multi_results": 10,
+        "api_timeout": 15,
+        "enable_all_search": True
+    }
+    
+    try:
+        if CONFIG_FILE.exists():
+            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                
+                # 验证并应用配置
+                return {
+                    "max_single_results": min(50, max(1, config.get("max_single_results", default_config["max_single_results"]))),
+                    "max_multi_results": min(20, max(1, config.get("max_multi_results", default_config["max_multi_results"]))),
+                    "api_timeout": min(30, max(5, config.get("api_timeout", default_config["api_timeout"]))),
+                    "enable_all_search": bool(config.get("enable_all_search", default_config["enable_all_search"]))
+                }
+        return default_config
+    except Exception as e:
+        logger.error(f"加载配置文件失败: {e}，使用默认配置")
+        return default_config
+
+config = load_config()
 # ===================
 
 class MCMODSearch:
@@ -26,16 +52,16 @@ class MCMODSearch:
     }
 
     def __init__(self):
-        self.port = PORT
+        self.port = 15001  # 端口仍保持硬编码
         self.api_process = None
         self.api_ready = asyncio.Event()
+        self.config = config  # 使用加载的配置
 
     @property
     def api_base_url(self):
         return f"http://localhost:{self.port}"
 
     async def _log_stream(self, stream, log_level):
-        """实时记录子进程输出"""
         while True:
             line = await stream.readline()
             if not line:
@@ -43,7 +69,6 @@ class MCMODSearch:
             logger.log(log_level, f"[API] {line.decode().strip()}")
 
     async def _check_api_ready(self):
-        """检查API是否就绪"""
         timeout = aiohttp.ClientTimeout(total=2)
         for _ in range(10):
             try:
@@ -56,7 +81,6 @@ class MCMODSearch:
         return False
 
     async def start_api_server(self):
-        """启动API服务器子进程"""
         try:
             api_path = os.path.join(os.path.dirname(__file__), "api", "mcmod_api.py")
             if not os.path.exists(api_path):
@@ -85,7 +109,6 @@ class MCMODSearch:
             await self._safe_terminate()
 
     async def _safe_terminate(self):
-        """安全终止子进程"""
         if self.api_process:
             try:
                 self.api_process.terminate()
@@ -99,13 +122,12 @@ class MCMODSearch:
                 self.api_process = None
 
     async def search(self, search_type: str, query: str) -> dict:
-        """执行搜索请求"""
         if not self.api_ready.is_set():
             logger.warning("等待API服务就绪...")
             await self.api_ready.wait()
 
         try:
-            timeout = aiohttp.ClientTimeout(total=API_TIMEOUT)
+            timeout = aiohttp.ClientTimeout(total=self.config["api_timeout"])
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(
                     f"{self.api_base_url}/search?{search_type}={query}"
@@ -117,7 +139,6 @@ class MCMODSearch:
             return {"status": "error", "message": str(e)}
 
     def format_results(self, data: dict, search_type: str) -> str:
-        """格式化搜索结果"""
         if data.get("status") != "success":
             return f"搜索失败: {data.get('message', '未知错误')}"
         
@@ -125,27 +146,28 @@ class MCMODSearch:
         if not results:
             return f"没有找到相关{self.SEARCH_TYPES.get(search_type, '')}结果"
         
-        limit = MAX_MULTI_RESULTS if search_type == "all" else MAX_SINGLE_RESULTS
+        limit = self.config["max_multi_results"] if search_type == "all" else self.config["max_single_results"]
         
-        table = "| 类型 | 名称 | 链接 |\n|------|------|------|\n"
+        table_header = "| 名称 | 链接 |\n|------|------|\n"
         
         if search_type == "all":
             parts = []
             for stype, stype_name in self.SEARCH_TYPES.items():
                 if items := results.get(stype, []):
-                    part = f"【{stype_name}】\n{table}"
+                    part = f"【{stype_name}】\n{table_header}"
                     for item in items[:limit]:
-                        part += f"| {stype_name} | {item.get('name', '未知')} | {item.get('url', '#')} |\n"
+                        part += f"| {item.get('name', '未知')} | {item.get('url', '#')} |\n"
                     if len(items) > limit:
                         part += f"...共{len(items)}条结果\n"
                     parts.append(part)
             return "\n".join(parts) if parts else "没有找到任何结果"
         else:
+            output = table_header
             for item in results[:limit]:
-                table += f"| {self.SEARCH_TYPES.get(search_type, '未知')} | {item.get('name', '未知')} | {item.get('url', '#')} |\n"
+                output += f"| {item.get('name', '未知')} | {item.get('url', '#')} |\n"
             if len(results) > limit:
-                table += f"...共{len(results)}条结果\n"
-            return table
+                output += f"...共{len(results)}条结果\n"
+            return output
 
 @register("MCMOD搜索插件", "mcmod", "MCMOD百科内容搜索", "1.0.0")
 class MCMODSearchPlugin(Star):
@@ -176,7 +198,7 @@ class MCMODSearchPlugin(Star):
 
     @filter.command("mcmod搜索")
     async def search_all(self, event: AstrMessageEvent, name: str):
-        if not ENABLE_ALL_SEARCH:
+        if not config["enable_all_search"]:
             yield event.chain_result([Plain("全搜索功能已被禁用")])
             return
             
